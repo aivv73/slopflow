@@ -1,0 +1,27 @@
+{
+  "name": "slopflow",
+  "version": "0.1.0",
+  "description": "Controlled issue execution workflow for AI coding agents",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "slopflow": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build",
+    "test": "npm run build && node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}
