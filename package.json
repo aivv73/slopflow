@@ -13,7 +13,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "npx -y -p typescript@5.9.3 -p @types/node@24.13.2 tsc -p tsconfig.json",
     "prepare": "npm run build",
     "test": "npm run build && node --test"
   },

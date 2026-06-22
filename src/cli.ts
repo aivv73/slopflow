@@ -22,6 +22,22 @@ type MachineConfig = {
   };
 };
 
+type IssueReference = {
+  provider: "github";
+  repo: string;
+  number: number;
+  kind: "issue" | "pull_request";
+};
+
+type GitHubItem = {
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  state: string;
+  kind: "issue" | "pull_request";
+};
+
 class SlopflowError extends Error {
   constructor(
     message: string,
@@ -41,6 +57,9 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     if (command === "status") {
       return await statusCommand();
     }
+    if (command === "start") {
+      return startCommand(args[0]);
+    }
     printHelp();
     return 0;
   } catch (error) {
@@ -58,6 +77,76 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     }
     throw error;
   }
+}
+
+function startCommand(issueId: string | undefined): number {
+  if (!issueId) {
+    throw new SlopflowError("Missing issue id.", "Run `slopflow start <issue-id>`.", 2);
+  }
+  if (!/^\d+$/.test(issueId)) {
+    throw new SlopflowError("Issue id must be a plain number for the configured repository.", undefined, 2);
+  }
+
+  const root = findRepoRoot(process.cwd());
+  if (!root) {
+    throw new SlopflowError(
+      "Could not find a repository root.",
+      "Run Slopflow inside an initialized repository.",
+      2,
+    );
+  }
+  const config = readMachineConfig(root);
+  if (config.issue_tracker.type !== "github") {
+    throw new SlopflowError("Unsupported issue tracker.", "Slopflow v0 start only supports GitHub.", 2);
+  }
+
+  const issueNumber = Number(issueId);
+  const item = fetchGitHubItem(config.issue_tracker.repo, issueNumber);
+  const issueReference: IssueReference = {
+    provider: "github",
+    repo: config.issue_tracker.repo,
+    number: item.number,
+    kind: item.kind,
+  };
+  const workDir = join(root, config.artifact_root, String(issueNumber));
+  const statusPath = join(workDir, "status.json");
+
+  let action = "created";
+  if (existsSync(workDir)) {
+    if (!existsSync(statusPath)) {
+      throw new SlopflowError(
+        `Work directory already exists without status metadata: ${relativeToCwd(workDir)}`,
+        "Move it aside or inspect it before retrying.",
+        2,
+      );
+    }
+    const existing = readJson(statusPath) as { issue?: IssueReference };
+    if (stableStringify(existing.issue) !== stableStringify(issueReference)) {
+      throw new SlopflowError(
+        `Work directory already exists for a different issue reference: ${relativeToCwd(workDir)}`,
+        "Slopflow will not overwrite issue work automatically.",
+        2,
+      );
+    }
+    action = "unchanged";
+  } else {
+    mkdirSync(workDir, { recursive: true });
+    const artifacts = buildStartArtifacts({ issue: item, issueReference, workDir, root });
+    for (const [filename, content] of Object.entries(artifacts)) {
+      writeFileSync(join(workDir, filename), content, "utf8");
+    }
+  }
+
+  printBlock("start", {
+    status: action,
+    issue: `github:${issueReference.repo}#${issueReference.number}`,
+    kind: issueReference.kind,
+    "work-directory": relativeToCwd(workDir),
+    contract: relativeToCwd(join(workDir, "contract.md")),
+    "goal-prompt": relativeToCwd(join(workDir, "goal-prompt.md")),
+    "next-step": `create goal mirror from ${relativeToCwd(join(workDir, "goal-prompt.md"))}`,
+  });
+  return 0;
 }
 
 function initCommand({ force }: { force: boolean }): number {
@@ -109,12 +198,7 @@ async function statusCommand(): Promise<number> {
     );
   }
 
-  const configPath = join(root, ".slopflow", "config.json");
-  if (!existsSync(configPath)) {
-    throw new SlopflowError("Slopflow machine config is missing.", "Run `slopflow init` first.", 2);
-  }
-
-  const config = readJson(configPath) as Partial<MachineConfig>;
+  const config = readMachineConfig(root);
   const artifactRoot = String(config.artifact_root ?? DEFAULT_ARTIFACT_ROOT);
   const workRoot = join(root, artifactRoot);
   const activeWorkCount = await countWorkDirs(workRoot);
@@ -122,15 +206,150 @@ async function statusCommand(): Promise<number> {
 
   printBlock("status", {
     state: "initialized",
-    repo: config.issue_tracker?.repo ?? "unknown",
-    issue_tracker: config.issue_tracker?.type ?? "unknown",
-    vcs: config.vcs?.type ?? "unknown",
+    repo: config.issue_tracker.repo,
+    issue_tracker: config.issue_tracker.type,
+    vcs: config.vcs.type,
     "artifact-root": artifactRoot,
     "current-jj-change": currentJjChange,
     "active-work-count": activeWorkCount,
     "next-step": "slopflow start <issue-id>",
   });
   return 0;
+}
+
+function readMachineConfig(root: string): MachineConfig {
+  const configPath = join(root, ".slopflow", "config.json");
+  if (!existsSync(configPath)) {
+    throw new SlopflowError("Slopflow machine config is missing.", "Run `slopflow init` first.", 2);
+  }
+  const config = readJson(configPath) as Partial<MachineConfig>;
+  if (!config.artifact_root || !config.issue_tracker?.type || !config.issue_tracker.repo || !config.vcs?.type) {
+    throw new SlopflowError("Slopflow machine config is incomplete.", "Run `slopflow init --force` to refresh it.", 2);
+  }
+  return config as MachineConfig;
+}
+
+function fetchGitHubItem(repo: string, number: number): GitHubItem {
+  const issue = runGhJson(["issue", "view", String(number), "--repo", repo, "--json", "number,title,body,url,state"]);
+  if (issue) {
+    return normalizeGitHubItem(issue, "issue");
+  }
+  const pr = runGhJson(["pr", "view", String(number), "--repo", repo, "--json", "number,title,body,url,state"]);
+  if (pr) {
+    return normalizeGitHubItem(pr, "pull_request");
+  }
+  throw new SlopflowError(
+    `Could not read GitHub issue or PR #${number} from ${repo}.`,
+    "Ensure `gh` is installed, authenticated, and the item exists.",
+    2,
+  );
+}
+
+function runGhJson(args: string[]): unknown | null {
+  const result = spawnSync("gh", args, { encoding: "utf8" });
+  if (result.error || result.status !== 0) {
+    return null;
+  }
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeGitHubItem(value: unknown, kind: GitHubItem["kind"]): GitHubItem {
+  const item = value as Partial<GitHubItem>;
+  if (typeof item.number !== "number" || typeof item.title !== "string") {
+    throw new SlopflowError("GitHub returned an unexpected issue shape.", undefined, 2);
+  }
+  return {
+    number: item.number,
+    title: item.title,
+    body: typeof item.body === "string" ? item.body : "",
+    url: typeof item.url === "string" ? item.url : "",
+    state: typeof item.state === "string" ? item.state : "unknown",
+    kind,
+  };
+}
+
+function buildStartArtifacts({
+  issue,
+  issueReference,
+  workDir,
+  root,
+}: {
+  issue: GitHubItem;
+  issueReference: IssueReference;
+  workDir: string;
+  root: string;
+}): Record<string, string> {
+  const contract = buildContract(issue, issueReference);
+  const status = {
+    schema_version: 1,
+    status: "started",
+    issue: issueReference,
+    work_directory: relative(root, workDir),
+    artifacts: {
+      issue: "issue.md",
+      contract: "contract.md",
+      goal_prompt: "goal-prompt.md",
+      next_steps: "next-steps.md",
+    },
+    created_by: "slopflow start",
+  };
+  return {
+    "issue.md": buildIssueMarkdown(issue, issueReference),
+    "contract.md": contract,
+    "status.json": `${JSON.stringify(status, null, 2)}\n`,
+    "goal-prompt.md": buildGoalPrompt(contract),
+    "next-steps.md": buildNextSteps(issueReference),
+  };
+}
+
+function buildIssueMarkdown(issue: GitHubItem, issueReference: IssueReference): string {
+  return `# ${escapeMarkdown(issue.title)}\n\n` +
+    `Issue: github:${issueReference.repo}#${issueReference.number}\n\n` +
+    `Kind: ${issueReference.kind}\n\n` +
+    `State: ${issue.state}\n\n` +
+    `URL: ${issue.url}\n\n` +
+    `## Body\n\n${issue.body || "_No issue body provided._"}\n`;
+}
+
+function buildContract(issue: GitHubItem, issueReference: IssueReference): string {
+  return `# Issue Execution Contract\n\n` +
+    `Issue: github:${issueReference.repo}#${issueReference.number}\n\n` +
+    `## Issue Summary\n\n${issue.title}\n\n` +
+    `## Acceptance Criteria\n\nExtract from the source issue before implementing. Source issue body:\n\n${indentBlock(issue.body || "No issue body provided.")}\n\n` +
+    `## Constraints\n\n- Stay within the scope of github:${issueReference.repo}#${issueReference.number}.\n- Preserve Slopflow's CLI-runbook model; do not introduce autonomous orchestration unless explicitly approved.\n- Do not add dependencies without justification and review.\n\n` +
+    `## Out of Scope\n\n- Work not requested by the source issue.\n- Publishing, pushing, merging, creating PRs, or closing issues unless separately requested.\n\n` +
+    `## Required Quality Gates\n\n- Test evidence is required unless an explicit test exception is written and accepted by review.\n- Reviewer verdict is required before completion.\n- Browser or design evidence is required only if this contract is updated to require it.\n\n` +
+    `## Blocked-Stop Conditions\n\n- Acceptance criteria cannot be extracted from the issue.\n- Required external tools or credentials are unavailable.\n- The implementation would expand beyond the source issue.\n- Quality gates cannot run and no reviewed test exception exists.\n\n` +
+    `## Completion Criteria\n\n- Implementation matches the issue execution contract.\n- Required quality gates have evidence.\n- Reviewer verdict is complete.\n- Completion note summarizes changes, tests, review result, and limitations.\n`;
+}
+
+function buildGoalPrompt(contract: string): string {
+  return `Create a Pi goal mirror from this Slopflow issue execution contract. The contract is canonical; the Pi goal is only a runtime mirror.\n\n${contract}`;
+}
+
+function buildNextSteps(issueReference: IssueReference): string {
+  return `# Next Steps\n\n` +
+    `1. Read \`contract.md\` and confirm scope for github:${issueReference.repo}#${issueReference.number}.\n` +
+    `2. Create a Pi goal mirror from \`goal-prompt.md\` if working inside Pi.\n` +
+    `3. Plan the smallest implementation that satisfies the contract.\n` +
+    `4. Implement only the contract scope.\n` +
+    `5. Capture test evidence with Slopflow when the test command exists.\n` +
+    `6. Do not mark complete until reviewer verdict and required evidence exist.\n`;
+}
+
+function indentBlock(value: string): string {
+  return value
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+}
+
+function escapeMarkdown(value: string): string {
+  return value.replace(/^#/gm, "\\#");
 }
 
 function discoverRepoContext(start: string): { root: string; githubRepo: string } {
@@ -314,7 +533,7 @@ function printBlock(name: string, values: Record<string, unknown>, stream: NodeJ
 }
 
 function printHelp(): void {
-  process.stdout.write(`Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n`);
+  process.stdout.write(`Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  start <issue-id>\n`);
 }
 
 if (fileURLToPath(import.meta.url) === process.argv[1]) {
