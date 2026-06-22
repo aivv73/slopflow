@@ -10,6 +10,7 @@ The first vertical slice provides:
 slopflow init
 slopflow status
 slopflow start <issue-id>
+slopflow test <issue-id> --name <gate> -- <command...>
 ```
 
 ## Usage
@@ -43,6 +44,15 @@ next-steps.md
 ```
 
 It does not create placeholder evidence, review, or completion files.
+
+Capture command-based quality evidence for started issue work:
+
+```bash
+slopflow test 2 --name unit -- npm test
+slopflow test 2 --name typecheck -- npm run build
+```
+
+`test` writes structured evidence and raw logs under `.slopflow/work/<issue-id>/evidence/`, then returns the wrapped command's exit code.
 
 ## Development
 

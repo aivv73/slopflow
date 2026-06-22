@@ -38,6 +38,30 @@ type GitHubItem = {
   kind: "issue" | "pull_request";
 };
 
+type TestAttempt = {
+  attempt_id: string;
+  name: string;
+  command: string;
+  status: "passed" | "failed";
+  exit_code: number;
+  log: string;
+  started_at: string;
+  finished_at: string;
+};
+
+type TestLatest = {
+  attempt_id: string;
+  status: TestAttempt["status"];
+  exit_code: number;
+  log: string;
+};
+
+type TestEvidence = {
+  schema_version: 1;
+  latest: Record<string, TestLatest>;
+  attempts: TestAttempt[];
+};
+
 class SlopflowError extends Error {
   constructor(
     message: string,
@@ -60,6 +84,9 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     if (command === "start") {
       return startCommand(args[0]);
     }
+    if (command === "test") {
+      return testCommand(args);
+    }
     printHelp();
     return 0;
   } catch (error) {
@@ -77,6 +104,132 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     }
     throw error;
   }
+}
+
+function testCommand(args: string[]): number {
+  const { issueId, gateName, command } = parseTestArgs(args);
+  const root = findRepoRoot(process.cwd());
+  if (!root) {
+    throw new SlopflowError("Could not find a repository root.", "Run Slopflow inside an initialized repository.", 2);
+  }
+  const config = readMachineConfig(root);
+  const workDir = join(root, config.artifact_root, issueId);
+  const workStatusPath = join(workDir, "status.json");
+  if (!existsSync(workStatusPath)) {
+    throw new SlopflowError(
+      `Issue work status not found for #${issueId}.`,
+      `Run \`slopflow start ${issueId}\` before capturing test evidence.`,
+      2,
+    );
+  }
+
+  const workStatus = readJson(workStatusPath) as { issue?: IssueReference };
+  if (!workStatus.issue) {
+    throw new SlopflowError(
+      `Issue work status is missing issue metadata for #${issueId}.`,
+      "Inspect the work directory before retrying.",
+      2,
+    );
+  }
+
+  const evidenceDir = join(workDir, "evidence");
+  const logsDir = join(evidenceDir, "logs");
+  mkdirSync(logsDir, { recursive: true });
+
+  const startedAt = new Date().toISOString();
+  const attemptId = `${gateName}-${formatTimestampForId(startedAt)}`;
+  const relativeLogPath = `evidence/logs/${attemptId}.txt`;
+  const logPath = join(workDir, relativeLogPath);
+  const result = spawnSync(command[0]!, command.slice(1), {
+    cwd: root,
+    encoding: "utf8",
+    env: process.env,
+  });
+  const finishedAt = new Date().toISOString();
+  const exitCode = typeof result.status === "number" ? result.status : 1;
+  const status: TestAttempt["status"] = exitCode === 0 ? "passed" : "failed";
+  const commandText = command.join(" ");
+
+  writeFileSync(
+    logPath,
+    buildTestLog({
+      attemptId,
+      gateName,
+      commandText,
+      cwd: root,
+      startedAt,
+      finishedAt,
+      exitCode,
+      stdout: result.stdout ?? "",
+      stderr: result.stderr || result.error?.message || "",
+    }),
+    "utf8",
+  );
+
+  const attempt: TestAttempt = {
+    attempt_id: attemptId,
+    name: gateName,
+    command: commandText,
+    status,
+    exit_code: exitCode,
+    log: relativeLogPath,
+    started_at: startedAt,
+    finished_at: finishedAt,
+  };
+  const evidencePath = join(evidenceDir, "tests.json");
+  const evidence = readTestEvidence(evidencePath);
+  evidence.attempts.push(attempt);
+  evidence.latest[gateName] = {
+    attempt_id: attempt.attempt_id,
+    status: attempt.status,
+    exit_code: attempt.exit_code,
+    log: attempt.log,
+  };
+  writeJson(evidencePath, evidence);
+
+  printBlock("test", {
+    status,
+    issue: `${workStatus.issue.provider}:${workStatus.issue.repo}#${workStatus.issue.number}`,
+    gate: gateName,
+    command: commandText,
+    "exit-code": exitCode,
+    log: relativeToCwd(logPath),
+    evidence: relativeToCwd(evidencePath),
+    "next-step": status === "passed" ? `slopflow review ${issueId}` : "fix implementation or create reviewed test exception",
+  });
+  return exitCode;
+}
+
+function parseTestArgs(args: string[]): { issueId: string; gateName: string; command: string[] } {
+  const issueId = args[0];
+  if (!issueId) {
+    throw new SlopflowError("Missing issue id.", "Run `slopflow test <issue-id> --name <gate> -- <command...>`.", 2);
+  }
+  if (!/^\d+$/.test(issueId)) {
+    throw new SlopflowError("Issue id must be a plain number for the configured repository.", undefined, 2);
+  }
+  const separatorIndex = args.indexOf("--");
+  if (separatorIndex === -1) {
+    throw new SlopflowError("Missing `--` before wrapped command.", "Run `slopflow test <issue-id> --name <gate> -- <command...>`.", 2);
+  }
+  const optionArgs = args.slice(1, separatorIndex);
+  const command = args.slice(separatorIndex + 1);
+  if (command.length === 0) {
+    throw new SlopflowError("Missing wrapped command.", "Pass the command after `--`.", 2);
+  }
+  const nameIndex = optionArgs.indexOf("--name");
+  const gateName = nameIndex >= 0 ? optionArgs[nameIndex + 1] : undefined;
+  if (!gateName) {
+    throw new SlopflowError("Missing required `--name <gate>`.", undefined, 2);
+  }
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(gateName)) {
+    throw new SlopflowError(
+      "Invalid gate name.",
+      "Use lowercase letters, numbers, underscores, or hyphens; start with a letter or number.",
+      2,
+    );
+  }
+  return { issueId, gateName, command };
 }
 
 function startCommand(issueId: string | undefined): number {
@@ -475,6 +628,55 @@ function writeJson(path: string, data: unknown): void {
   writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`, "utf8");
 }
 
+function readTestEvidence(path: string): TestEvidence {
+  if (!existsSync(path)) {
+    return { schema_version: 1, latest: {}, attempts: [] };
+  }
+  const existing = readJson(path) as Partial<TestEvidence>;
+  return {
+    schema_version: 1,
+    latest: existing.latest ?? {},
+    attempts: existing.attempts ?? [],
+  };
+}
+
+function formatTimestampForId(value: string): string {
+  return value.replace(/[:.]/g, "-");
+}
+
+function buildTestLog({
+  attemptId,
+  gateName,
+  commandText,
+  cwd,
+  startedAt,
+  finishedAt,
+  exitCode,
+  stdout,
+  stderr,
+}: {
+  attemptId: string;
+  gateName: string;
+  commandText: string;
+  cwd: string;
+  startedAt: string;
+  finishedAt: string;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}): string {
+  return `slopflow test log\n` +
+    `attempt: ${attemptId}\n` +
+    `gate: ${gateName}\n` +
+    `command: ${commandText}\n` +
+    `cwd: ${cwd}\n` +
+    `started_at: ${startedAt}\n` +
+    `finished_at: ${finishedAt}\n` +
+    `exit_code: ${exitCode}\n\n` +
+    `--- stdout ---\n${stdout}\n` +
+    `--- stderr ---\n${stderr}\n`;
+}
+
 function stableStringify(value: unknown): string {
   if (Array.isArray(value)) {
     return `[${value.map((item) => stableStringify(item)).join(",")}]`;
@@ -533,7 +735,9 @@ function printBlock(name: string, values: Record<string, unknown>, stream: NodeJ
 }
 
 function printHelp(): void {
-  process.stdout.write(`Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  start <issue-id>\n`);
+  process.stdout.write(
+    `Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  start <issue-id>\n  test <issue-id> --name <gate> -- <command...>\n`,
+  );
 }
 
 if (fileURLToPath(import.meta.url) === process.argv[1]) {

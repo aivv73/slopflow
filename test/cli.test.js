@@ -242,3 +242,99 @@ test("start refuses existing work directory for a different issue reference", re
   assert.match(result.stderr, /status: blocked/);
   assert.match(result.stderr, /different issue reference/);
 }));
+
+test("test records passed command evidence", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+
+  const result = slopflow(repo, env, "test", "2", "--name", "unit", "--", process.execPath, "-e", "console.log('pass'); console.error('note')");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /test:/);
+  assert.match(result.stdout, /status: passed/);
+  assert.match(result.stdout, /issue: github:aivv73\/slopflow#2/);
+  assert.match(result.stdout, /gate: unit/);
+  assert.match(result.stdout, /exit-code: 0/);
+  assert.match(result.stdout, /evidence: \.slopflow\/work\/2\/evidence\/tests.json/);
+
+  const evidence = JSON.parse(readFileSync(join(repo, ".slopflow", "work", "2", "evidence", "tests.json"), "utf8"));
+  assert.equal(evidence.schema_version, 1);
+  assert.equal(evidence.attempts.length, 1);
+  assert.equal(evidence.attempts[0].name, "unit");
+  assert.equal(evidence.attempts[0].status, "passed");
+  assert.deepEqual(evidence.latest.unit, {
+    attempt_id: evidence.attempts[0].attempt_id,
+    status: "passed",
+    exit_code: 0,
+    log: evidence.attempts[0].log,
+  });
+  assert.match(evidence.attempts[0].attempt_id, /^unit-\d{4}-\d{2}-\d{2}T/);
+
+  const log = readFileSync(join(repo, ".slopflow", "work", "2", evidence.attempts[0].log), "utf8");
+  assert.match(log, /slopflow test log/);
+  assert.match(log, /gate: unit/);
+  assert.match(log, /exit_code: 0/);
+  assert.match(log, /--- stdout ---\npass/);
+  assert.match(log, /--- stderr ---\nnote/);
+}));
+
+test("test records failed command evidence and returns wrapped exit code", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+
+  const result = slopflow(repo, env, "test", "2", "--name", "unit", "--", process.execPath, "-e", "console.error('boom'); process.exit(7)");
+
+  assert.equal(result.status, 7);
+  assert.match(result.stdout, /status: failed/);
+  assert.match(result.stdout, /exit-code: 7/);
+  assert.match(result.stdout, /next-step: fix implementation or create reviewed test exception/);
+
+  const evidence = JSON.parse(readFileSync(join(repo, ".slopflow", "work", "2", "evidence", "tests.json"), "utf8"));
+  assert.equal(evidence.attempts.length, 1);
+  assert.equal(evidence.latest.unit.status, "failed");
+  assert.equal(evidence.latest.unit.exit_code, 7);
+  const log = readFileSync(join(repo, ".slopflow", "work", "2", evidence.latest.unit.log), "utf8");
+  assert.match(log, /--- stderr ---\nboom/);
+}));
+
+test("test appends attempts and updates latest per gate", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  assert.equal(slopflow(repo, env, "test", "2", "--name", "unit", "--", process.execPath, "-e", "process.exit(5)").status, 5);
+  assert.equal(slopflow(repo, env, "test", "2", "--name", "unit", "--", process.execPath, "-e", "console.log('fixed')").status, 0);
+
+  const evidence = JSON.parse(readFileSync(join(repo, ".slopflow", "work", "2", "evidence", "tests.json"), "utf8"));
+  assert.equal(evidence.attempts.length, 2);
+  assert.equal(evidence.attempts[0].status, "failed");
+  assert.equal(evidence.attempts[1].status, "passed");
+  assert.deepEqual(evidence.latest.unit, {
+    attempt_id: evidence.attempts[1].attempt_id,
+    status: "passed",
+    exit_code: 0,
+    log: evidence.attempts[1].log,
+  });
+  assert.notEqual(evidence.attempts[0].log, evidence.attempts[1].log);
+}));
+
+test("test refuses missing work directory", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+
+  const result = slopflow(repo, env, "test", "2", "--name", "unit", "--", process.execPath, "-e", "console.log('never')");
+
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /status: blocked/);
+  assert.match(result.stderr, /slopflow start 2/);
+}));
+
+test("test validates gate name and command separator", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+
+  const invalidName = slopflow(repo, env, "test", "2", "--name", "Unit", "--", process.execPath, "-e", "console.log('never')");
+  assert.equal(invalidName.status, 2);
+  assert.match(invalidName.stderr, /Invalid gate name/);
+
+  const missingSeparator = slopflow(repo, env, "test", "2", "--name", "unit", process.execPath, "-e", "console.log('never')");
+  assert.equal(missingSeparator.status, 2);
+  assert.match(missingSeparator.stderr, /Missing `--`/);
+}));

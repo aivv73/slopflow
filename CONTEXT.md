@@ -49,6 +49,10 @@ _Avoid_: Review notes, approval comment
 The canonical structured test record in `.slopflow/work/<issue-id>/evidence/tests.json`, with raw command logs stored beside it, that proves which quality gates ran and whether they passed.
 _Avoid_: Test claim, informal summary
 
+It keeps an append-only attempt history and a latest-result index per gate. The latest index points to the current attempt id and current status for each gate, while the attempts list preserves full review history.
+
+Each test evidence attempt uses a timestamp-based attempt id and log filename, such as `unit-2026-06-23T01-27-00-000Z` and `evidence/logs/unit-2026-06-23T01-27-00-000Z.txt`.
+
 **Test exception**:
 A written explanation in `.slopflow/work/<issue-id>/evidence/test-exception.md` for why required tests could not run, which still requires reviewer acceptance before completion.
 _Avoid_: Skipped tests, ignored failure
@@ -58,8 +62,13 @@ A contract-declared verification requirement, such as tests, browser acceptance,
 _Avoid_: Nice-to-have check, optional validation
 
 **Test command**:
-The Slopflow action that runs a named command and records its structured result plus raw log as test evidence.
+The Slopflow action that runs a named command-based quality gate and records its structured result plus raw log as test evidence. It can capture unit tests, lint, typecheck, build, or any other command-based verification declared by the issue execution contract.
 _Avoid_: Test runner, test framework
+Its v0 CLI shape is `slopflow test <issue-id> --name <gate> -- <command...>`, where the issue id is numeric, `--name` is required, gate names use lowercase letters/numbers/underscore/hyphen, and `--` is required before the wrapped command.
+By default, it returns the wrapped command's exit code even when failure evidence is recorded successfully.
+In v0, wrapped commands run from the repository root for reproducibility; package-specific commands must encode their own working-directory behavior.
+Raw test logs include a metadata header plus separate stdout and stderr sections so each log is useful as standalone review evidence.
+It refuses to run unless the issue work directory and `status.json` already exist, because evidence must attach to a started issue execution contract.
 
 **Review command**:
 The Slopflow action that prepares a review packet and reports whether a reviewer verdict exists and approves completion.
