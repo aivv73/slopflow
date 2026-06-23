@@ -154,8 +154,10 @@ Run the install smoke test:
 npm run pack:smoke
 ```
 
-Run full local CI:
+Run full local CI, matching the GitHub Actions workflow:
 
 ```bash
 npm run ci
 ```
+
+GitHub Actions runs the same `npm run ci` package checks on pushes to `main` and pull requests.
