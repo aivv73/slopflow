@@ -163,3 +163,11 @@ npm run ci
 ```
 
 GitHub Actions runs the same `npm run ci` package checks on pushes to `main` and pull requests.
+
+Check release readiness without publishing:
+
+```bash
+npm run release:check
+```
+
+See [docs/release.md](docs/release.md) for the manual npm release checklist.

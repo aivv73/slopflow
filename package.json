@@ -34,7 +34,8 @@
     "pack:check": "npm run build && npm pack --dry-run",
     "pack:smoke": "npm run build && node scripts/pack-smoke.mjs",
     "prepare": "npm run build",
-    "test": "npm run build && node --test"
+    "test": "npm run build && node --test",
+    "release:check": "npm run ci && npm pack --dry-run"
   },
   "engines": {
     "node": ">=24"
