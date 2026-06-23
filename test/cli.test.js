@@ -67,6 +67,18 @@ function withRepo(fn) {
   };
 }
 
+function writeReview(repo, issueId, overrides = {}) {
+  writeFileSync(join(repo, ".slopflow", "work", issueId, "review.json"), JSON.stringify({
+    schema_version: 1,
+    verdict: "complete",
+    reviewer: "pi-reviewer",
+    reviewed_at: new Date().toISOString(),
+    summary: "Looks good.",
+    required_changes: [],
+    ...overrides,
+  }), "utf8");
+}
+
 test("init creates machine config and work root", requiresJj, withRepo((repo, env) => {
   const result = slopflow(repo, env, "init");
 
@@ -471,4 +483,142 @@ test("review refuses missing work directory and non-numeric issue id", requiresJ
   const invalidId = slopflow(repo, env, "review", "abc");
   assert.equal(invalidId.status, 2);
   assert.match(invalidId.stderr, /Issue id must be a plain number/);
+}));
+
+test("complete marks work complete and generates completion note", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  assert.equal(slopflow(repo, env, "test", "2", "--name", "unit", "--", process.execPath, "-e", "console.log('ok')").status, 0);
+  writeReview(repo, "2");
+
+  const result = slopflow(repo, env, "complete", "2");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /complete:/);
+  assert.match(result.stdout, /status: complete/);
+  assert.match(result.stdout, /issue: github:aivv73\/slopflow#2/);
+  assert.match(result.stdout, /tests: passed/);
+  assert.match(result.stdout, /review: complete/);
+  assert.match(result.stdout, /completion-note: \.slopflow\/work\/2\/completion-note.md/);
+
+  const status = JSON.parse(readFileSync(join(repo, ".slopflow", "work", "2", "status.json"), "utf8"));
+  assert.equal(status.status, "complete");
+  assert.match(status.completed_at, /^\d{4}-\d{2}-\d{2}T/);
+  assert.deepEqual(status.issue, {
+    provider: "github",
+    repo: "aivv73/slopflow",
+    number: 2,
+    kind: "issue",
+  });
+
+  const note = readFileSync(join(repo, ".slopflow", "work", "2", "completion-note.md"), "utf8");
+  assert.match(note, /# Completion Note/);
+  assert.match(note, /Issue: github:aivv73\/slopflow#2/);
+  assert.match(note, /Tests: passed/);
+  assert.match(note, /Verdict: complete/);
+}));
+
+test("complete preserves existing completion note", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  assert.equal(slopflow(repo, env, "test", "2", "--name", "unit", "--", process.execPath, "-e", "console.log('ok')").status, 0);
+  writeReview(repo, "2");
+  const notePath = join(repo, ".slopflow", "work", "2", "completion-note.md");
+  writeFileSync(notePath, "human note\n", "utf8");
+
+  assert.equal(slopflow(repo, env, "complete", "2").status, 0);
+
+  assert.equal(readFileSync(notePath, "utf8"), "human note\n");
+}));
+
+test("complete blocks missing and failed test evidence", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  writeReview(repo, "2");
+
+  const missing = slopflow(repo, env, "complete", "2");
+  assert.equal(missing.status, 2);
+  assert.match(missing.stdout, /status: blocked/);
+  assert.match(missing.stdout, /reason: missing test evidence/);
+
+  assert.equal(slopflow(repo, env, "test", "2", "--name", "unit", "--", process.execPath, "-e", "process.exit(6)").status, 6);
+  const failed = slopflow(repo, env, "complete", "2");
+  assert.equal(failed.status, 2);
+  assert.match(failed.stdout, /failed latest test gate: unit/);
+}));
+
+test("complete requires at least one passed latest test gate", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  mkdirSync(join(repo, ".slopflow", "work", "2", "evidence"), { recursive: true });
+  writeFileSync(join(repo, ".slopflow", "work", "2", "evidence", "tests.json"), JSON.stringify({
+    schema_version: 1,
+    attempts: [],
+    latest: {
+      unit: {
+        attempt_id: "unit-2026-01-01T00-00-00-000Z",
+        status: "skipped",
+        exit_code: 0,
+        log: "evidence/logs/unit-2026-01-01T00-00-00-000Z.txt",
+      },
+    },
+  }), "utf8");
+  writeReview(repo, "2");
+
+  const result = slopflow(repo, env, "complete", "2");
+
+  assert.equal(result.status, 2);
+  assert.match(result.stdout, /reason: no latest test gate passed/);
+}));
+
+test("complete blocks missing, changes-requested, and invalid review", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  assert.equal(slopflow(repo, env, "test", "2", "--name", "unit", "--", process.execPath, "-e", "console.log('ok')").status, 0);
+
+  const missing = slopflow(repo, env, "complete", "2");
+  assert.equal(missing.status, 2);
+  assert.match(missing.stdout, /reason: missing review verdict/);
+
+  writeReview(repo, "2", { verdict: "changes-requested", required_changes: ["Fix it."] });
+  const changes = slopflow(repo, env, "complete", "2");
+  assert.equal(changes.status, 2);
+  assert.match(changes.stdout, /reason: review verdict is changes-requested/);
+
+  writeReview(repo, "2", { verdict: "complete", required_changes: ["Contradiction."] });
+  const invalid = slopflow(repo, env, "complete", "2");
+  assert.equal(invalid.status, 2);
+  assert.match(invalid.stdout, /reason: invalid review verdict/);
+}));
+
+test("complete allows reviewed test exception without tests", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  mkdirSync(join(repo, ".slopflow", "work", "2", "evidence"), { recursive: true });
+  writeFileSync(join(repo, ".slopflow", "work", "2", "evidence", "test-exception.md"), "Tests cannot run in this sandbox.\n", "utf8");
+  writeReview(repo, "2");
+
+  const result = slopflow(repo, env, "complete", "2");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /tests: exception-accepted/);
+  const note = readFileSync(join(repo, ".slopflow", "work", "2", "completion-note.md"), "utf8");
+  assert.match(note, /Test exception accepted by reviewer/);
+}));
+
+test("complete validates issue id, work directory, and contract", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  const invalidId = slopflow(repo, env, "complete", "abc");
+  assert.equal(invalidId.status, 2);
+  assert.match(invalidId.stderr, /Issue id must be a plain number/);
+
+  const missingWork = slopflow(repo, env, "complete", "2");
+  assert.equal(missingWork.status, 2);
+  assert.match(missingWork.stderr, /slopflow start 2/);
+
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  rmSync(join(repo, ".slopflow", "work", "2", "contract.md"));
+  const missingContract = slopflow(repo, env, "complete", "2");
+  assert.equal(missingContract.status, 2);
+  assert.match(missingContract.stdout, /reason: missing contract.md/);
 }));

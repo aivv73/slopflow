@@ -100,6 +100,9 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     if (command === "review") {
       return reviewCommand(args[0]);
     }
+    if (command === "complete") {
+      return completeCommand(args[0]);
+    }
     printHelp();
     return 0;
   } catch (error) {
@@ -117,6 +120,132 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     }
     throw error;
   }
+}
+
+function completeCommand(issueId: string | undefined): number {
+  if (!issueId) {
+    throw new SlopflowError("Missing issue id.", "Run `slopflow complete <issue-id>`.", 2);
+  }
+  if (!/^\d+$/.test(issueId)) {
+    throw new SlopflowError("Issue id must be a plain number for the configured repository.", undefined, 2);
+  }
+
+  const root = findRepoRoot(process.cwd());
+  if (!root) {
+    throw new SlopflowError("Could not find a repository root.", "Run Slopflow inside an initialized repository.", 2);
+  }
+  const config = readMachineConfig(root);
+  const workDir = join(root, config.artifact_root, issueId);
+  const workStatusPath = join(workDir, "status.json");
+  const workStatus = readWorkStatus(workDir, issueId, "complete");
+  const issue = workStatus.issue;
+  const issueText = `${issue.provider}:${issue.repo}#${issue.number}`;
+
+  const contractPath = join(workDir, "contract.md");
+  if (!existsSync(contractPath)) {
+    return completeBlocked(issueText, "missing contract.md", "restore contract.md or rerun slopflow start", workDir);
+  }
+  if (!isJjStatusReadable(root)) {
+    return completeBlocked(issueText, "jj status is not readable", "fix Jujutsu repository state", workDir);
+  }
+
+  const reviewPath = join(workDir, "review.json");
+  if (!existsSync(reviewPath)) {
+    return completeBlocked(issueText, "missing review verdict", `slopflow review ${issueId}`, workDir);
+  }
+  const reviewValidation = readAndValidateReviewVerdict(reviewPath);
+  if (!reviewValidation.ok) {
+    return completeBlocked(issueText, "invalid review verdict", "fix review.json", workDir);
+  }
+  if (reviewValidation.verdict.verdict !== "complete") {
+    return completeBlocked(issueText, "review verdict is changes-requested", "address required changes", workDir);
+  }
+
+  const evidenceGate = evaluateCompletionEvidence(workDir);
+  if (!evidenceGate.ok) {
+    return completeBlocked(issueText, evidenceGate.reason, evidenceGate.nextStep, workDir);
+  }
+
+  const completionNotePath = join(workDir, "completion-note.md");
+  if (!existsSync(completionNotePath)) {
+    writeFileSync(
+      completionNotePath,
+      buildCompletionNote({ issue: issueText, testsStatus: evidenceGate.testsStatus, review: reviewValidation.verdict, workDir }),
+      "utf8",
+    );
+  }
+
+  const updatedStatus = { ...(readJson(workStatusPath) as Record<string, unknown>), status: "complete", completed_at: new Date().toISOString() };
+  writeJson(workStatusPath, updatedStatus);
+
+  printBlock("complete", {
+    status: "complete",
+    issue: issueText,
+    tests: evidenceGate.testsStatus,
+    review: "complete",
+    "completion-note": relativeToCwd(completionNotePath),
+    "next-step": "export/publish when ready",
+  });
+  return 0;
+}
+
+function completeBlocked(issue: string, reason: string, nextStep: string, workDir: string): number {
+  printBlock("complete", {
+    status: "blocked",
+    issue,
+    reason,
+    "completion-note": relativeToCwd(join(workDir, "completion-note.md")),
+    "next-step": nextStep,
+  });
+  return 2;
+}
+
+function evaluateCompletionEvidence(workDir: string): { ok: true; testsStatus: string } | { ok: false; reason: string; nextStep: string } {
+  const testsPath = join(workDir, "evidence", "tests.json");
+  if (!existsSync(testsPath)) {
+    const exceptionPath = join(workDir, "evidence", "test-exception.md");
+    if (existsSync(exceptionPath)) {
+      return { ok: true, testsStatus: "exception-accepted" };
+    }
+    return {
+      ok: false,
+      reason: "missing test evidence",
+      nextStep: "slopflow test <issue-id> --name <gate> -- <command>",
+    };
+  }
+
+  const evidence = readTestEvidence(testsPath);
+  const latest = Object.entries(evidence.latest);
+  if (latest.length === 0) {
+    return { ok: false, reason: "missing latest test gate", nextStep: "slopflow test <issue-id> --name <gate> -- <command>" };
+  }
+  const failed = latest.filter(([, gate]) => gate.status === "failed").map(([name]) => name);
+  if (failed.length > 0) {
+    return { ok: false, reason: `failed latest test gate: ${failed.join(", ")}`, nextStep: "fix failing gates and rerun slopflow test" };
+  }
+  const passed = latest.filter(([, gate]) => gate.status === "passed");
+  if (passed.length === 0) {
+    return { ok: false, reason: "no latest test gate passed", nextStep: "rerun a required quality gate with slopflow test" };
+  }
+  return { ok: true, testsStatus: "passed" };
+}
+
+function buildCompletionNote({ issue, testsStatus, review, workDir }: { issue: string; testsStatus: string; review: ReviewVerdict; workDir: string }): string {
+  const testsSummary = buildTestEvidenceSummary(join(workDir, "evidence", "tests.json"));
+  const exceptionPath = join(workDir, "evidence", "test-exception.md");
+  const exception = existsSync(exceptionPath) ? readFileSync(exceptionPath, "utf8") : "";
+  return `# Completion Note\n\n` +
+    `Issue: ${issue}\n\n` +
+    `## Summary\n\nLocal issue work passed Slopflow completion gates.\n\n` +
+    `## Quality Gates\n\n` +
+    `Tests: ${testsStatus}\n\n` +
+    `${testsStatus === "exception-accepted" ? `Test exception accepted by reviewer:\n\n${indentBlock(exception)}\n\n` : `${testsSummary}\n\n`}` +
+    `## Review\n\n` +
+    `Verdict: ${review.verdict}\n\n` +
+    `Reviewer: ${review.reviewer}\n\n` +
+    `Reviewed at: ${review.reviewed_at}\n\n` +
+    `${review.summary}\n\n` +
+    `## Known Limitations / Follow-ups\n\nNone recorded.\n`;
 }
 
 function reviewCommand(issueId: string | undefined): number {
@@ -266,12 +395,12 @@ function testCommand(args: string[]): number {
   return exitCode;
 }
 
-function readWorkStatus(workDir: string, issueId: string, command: "test" | "review"): { issue: IssueReference } {
+function readWorkStatus(workDir: string, issueId: string, command: "test" | "review" | "complete"): { issue: IssueReference } {
   const workStatusPath = join(workDir, "status.json");
   if (!existsSync(workStatusPath)) {
     throw new SlopflowError(
       `Issue work status not found for #${issueId}.`,
-      `Run \`slopflow start ${issueId}\` before ${command === "test" ? "capturing test evidence" : "preparing review"}.`,
+      `Run \`slopflow start ${issueId}\` before ${command === "test" ? "capturing test evidence" : command === "review" ? "preparing review" : "completing work"}.`,
       2,
     );
   }
@@ -925,6 +1054,11 @@ function readCurrentJjChange(root: string): string {
   return "unknown";
 }
 
+function isJjStatusReadable(root: string): boolean {
+  const result = spawnSync("jj", ["--no-pager", "status"], { cwd: root, encoding: "utf8" });
+  return !result.error && result.status === 0;
+}
+
 function commandExists(command: string): boolean {
   const result = spawnSync(command, ["--version"], { encoding: "utf8" });
   return !result.error && result.status === 0;
@@ -944,7 +1078,7 @@ function printBlock(name: string, values: Record<string, unknown>, stream: NodeJ
 
 function printHelp(): void {
   process.stdout.write(
-    `Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  start <issue-id>\n  test <issue-id> --name <gate> -- <command...>\n  review <issue-id>\n`,
+    `Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  start <issue-id>\n  test <issue-id> --name <gate> -- <command...>\n  review <issue-id>\n  complete <issue-id>\n`,
   );
 }
 

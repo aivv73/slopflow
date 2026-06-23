@@ -12,6 +12,7 @@ slopflow status
 slopflow start <issue-id>
 slopflow test <issue-id> --name <gate> -- <command...>
 slopflow review <issue-id>
+slopflow complete <issue-id>
 ```
 
 ## Usage
@@ -62,6 +63,14 @@ slopflow review 2
 ```
 
 `review` writes `.slopflow/work/<issue-id>/review-packet.md` but never creates `review.json`. A separate human or agent reviewer must write the verdict.
+
+Mark issue work locally complete after evidence and reviewer gates pass:
+
+```bash
+slopflow complete 2
+```
+
+`complete` generates `completion-note.md` when missing, preserves an existing note, updates local `status.json`, and never publishes, pushes, merges, opens PRs, or closes issues.
 
 ## Development
 

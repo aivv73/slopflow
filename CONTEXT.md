@@ -39,6 +39,13 @@ Only real artifacts are stored in a work directory. Missing evidence, review, or
 **Complete**:
 The Slopflow action that marks local issue work complete only after required evidence and reviewer approval are present.
 _Avoid_: Publish, push, merge, close issue
+Its v0 CLI shape is `slopflow complete <issue-id>`, where the issue id is required and numeric, initialized machine config is required, and the issue work directory plus `status.json` must exist.
+It generates `completion-note.md` when missing after all gates pass, but preserves an existing completion note written by a human or agent.
+In v0, completion requires at least one latest test evidence gate to be passed and no latest test evidence gate to be failed; it does not parse required gates from the markdown issue execution contract.
+If test evidence is missing, v0 completion may proceed only when `evidence/test-exception.md` exists and the reviewer verdict is complete, treating the reviewer approval as acceptance of the exception.
+It preserves existing `status.json` fields and sets `status: "complete"` plus `completed_at` when local completion succeeds.
+It verifies Jujutsu status is readable but does not require an empty diff, because the working copy commit is the issue change in Jujutsu.
+Its output status is `complete` on success or `blocked` when a required local artifact gate is missing or failing, with exit code 2 for blocked completion.
 
 
 **Reviewer verdict**:
