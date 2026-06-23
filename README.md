@@ -94,7 +94,9 @@ Agent skills are installed separately through Vercel Skills. The Slopflow npm pa
 
 ## Install
 
-Once Slopflow is published to npm, install the CLI globally:
+Slopflow is published on npm: https://www.npmjs.com/package/slopflow
+
+Install the CLI globally:
 
 ```bash
 npm install -g slopflow

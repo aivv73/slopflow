@@ -59,7 +59,7 @@ Do not publish from an agent session unless the user explicitly asks for publish
 
 ## Post-publish checks
 
-After publishing, verify the published CLI can be installed and invoked from a temporary directory:
+Slopflow is published at https://www.npmjs.com/package/slopflow. After publishing a new version, verify the published CLI can be installed and invoked from a temporary directory:
 
 ```bash
 tmp=$(mktemp -d)
