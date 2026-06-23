@@ -18,3 +18,5 @@ Concise map of Slopflow's architectural decision records.
 - [ADR 0005 — Complete is a local artifact gate](0005-complete-is-a-local-artifact-gate.md): completion is local and gated by evidence and review, not publishing.
 - [ADR 0006 — Skills are distributed by skills installers](0006-skills-are-distributed-by-skills-installers.md): npm distributes the CLI while skills tooling installs agent skills.
 - [ADR 0007 — Lifecycle commands are artifact state transitions](0007-lifecycle-commands-are-artifact-state-transitions.md): pause, resume, and cancel manage local lifecycle artifacts only.
+- [ADR 0008 — CLI output follows AXI principles](0008-cli-output-follows-axi-principles.md): default CLI output should be compact, structured, contextual, and bounded by Slopflow's runbook scope.
+- [ADR 0009 — Agent docs use OKF; runtime artifacts remain Slopflow artifacts](0009-agent-docs-use-okf-runtime-artifacts-remain-slopflow-artifacts.md): repository agent docs use OKF conventions while `.slopflow/work/` remains CLI-owned runtime state.
