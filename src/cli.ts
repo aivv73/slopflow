@@ -86,6 +86,7 @@ class SlopflowError extends Error {
     message: string,
     readonly hint?: string,
     readonly code = 1,
+    readonly details: Record<string, unknown> = {},
   ) {
     super(message);
   }
@@ -136,6 +137,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         {
           status: "blocked",
           message: error.message,
+          ...error.details,
           ...(error.hint ? { hint: error.hint } : {}),
         },
       );
@@ -813,31 +815,127 @@ function readMachineConfig(root: string): MachineConfig {
 }
 
 function fetchGitHubItem(repo: string, number: number): GitHubItem {
-  const issue = runGhJson(["issue", "view", String(number), "--repo", repo, "--json", "number,title,body,url,state"]);
-  if (issue) {
-    return normalizeGitHubItem(issue, "issue");
+  const issueArgs = ["issue", "view", String(number), "--repo", repo, "--json", "number,title,body,url,state"];
+  const issue = runGhJson(issueArgs);
+  if (issue.ok) {
+    return normalizeGitHubItem(issue.value, "issue");
   }
-  const pr = runGhJson(["pr", "view", String(number), "--repo", repo, "--json", "number,title,body,url,state"]);
-  if (pr) {
-    return normalizeGitHubItem(pr, "pull_request");
+  if (!issue.notFound) {
+    throw githubCommandError(issue);
+  }
+
+  const prArgs = ["pr", "view", String(number), "--repo", repo, "--json", "number,title,body,url,state"];
+  const pr = runGhJson(prArgs);
+  if (pr.ok) {
+    return normalizeGitHubItem(pr.value, "pull_request");
+  }
+  if (!pr.notFound) {
+    throw githubCommandError(pr);
   }
   throw new SlopflowError(
     `Could not read GitHub issue or PR #${number} from ${repo}.`,
-    "Ensure `gh` is installed, authenticated, and the item exists.",
+    "Ensure the issue or PR exists in the configured repository.",
     2,
+    {
+      command: `gh ${issueArgs.join(" ")} && gh ${prArgs.join(" ")}`,
+      "exit-code": pr.exitCode,
+      detail: summarizeCommandFailure(pr),
+      "next-step": `verify #${number} exists in ${repo}`,
+    },
   );
 }
 
-function runGhJson(args: string[]): unknown | null {
+type GhJsonResult =
+  | { ok: true; value: unknown }
+  | { ok: false; args: string[]; exitCode: number | string; stdout: string; stderr: string; message: string; notFound: boolean; spawnError?: string };
+
+function runGhJson(args: string[]): GhJsonResult {
   const result = spawnSync("gh", args, { encoding: "utf8" });
-  if (result.error || result.status !== 0) {
-    return null;
+  if (result.error) {
+    return {
+      ok: false,
+      args,
+      exitCode: "spawn-error",
+      stdout: result.stdout ?? "",
+      stderr: result.stderr ?? "",
+      message: result.error.message,
+      notFound: false,
+      spawnError: result.error.message,
+    };
+  }
+  if (result.status !== 0) {
+    const stdout = result.stdout ?? "";
+    const stderr = result.stderr ?? "";
+    return {
+      ok: false,
+      args,
+      exitCode: typeof result.status === "number" ? result.status : 1,
+      stdout,
+      stderr,
+      message: summarizeText(stderr || stdout || "gh command failed"),
+      notFound: isLikelyNotFound(stdout, stderr),
+    };
   }
   try {
-    return JSON.parse(result.stdout);
-  } catch {
-    return null;
+    return { ok: true, value: JSON.parse(result.stdout) };
+  } catch (error) {
+    return {
+      ok: false,
+      args,
+      exitCode: 0,
+      stdout: result.stdout ?? "",
+      stderr: result.stderr ?? "",
+      message: error instanceof Error ? error.message : "GitHub JSON parse failed",
+      notFound: false,
+    };
   }
+}
+
+function githubCommandError(failure: Exclude<GhJsonResult, { ok: true }>): SlopflowError {
+  return new SlopflowError(
+    "GitHub command failed while reading issue work.",
+    nextStepForGithubFailure(failure),
+    2,
+    {
+      command: `gh ${failure.args.join(" ")}`,
+      "exit-code": failure.exitCode,
+      detail: summarizeCommandFailure(failure),
+      "next-step": nextStepForGithubFailure(failure),
+    },
+  );
+}
+
+function summarizeCommandFailure(failure: Exclude<GhJsonResult, { ok: true }>): string {
+  const parts = [failure.message, summarizeText(failure.stderr), summarizeText(failure.stdout)].filter(Boolean);
+  return parts.length > 0 ? parts.join(" | ") : "gh command failed";
+}
+
+function summarizeText(value: string, limit = 300): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  return normalized.length > limit ? `${normalized.slice(0, limit)}...` : normalized;
+}
+
+function isLikelyNotFound(stdout: string, stderr: string): boolean {
+  const text = `${stdout}\n${stderr}`.toLowerCase();
+  return /not found|could not resolve|no .* found|404/.test(text) && !isLikelyAuthFailure(stdout, stderr);
+}
+
+function isLikelyAuthFailure(stdout: string, stderr: string): boolean {
+  return /auth|authentication|authorize|login|401|403|forbidden|permission/i.test(`${stdout}\n${stderr}`);
+}
+
+function nextStepForGithubFailure(failure: Exclude<GhJsonResult, { ok: true }>): string {
+  if (failure.spawnError) {
+    return "install GitHub CLI `gh` and ensure it is on PATH";
+  }
+  if (isLikelyAuthFailure(failure.stdout, failure.stderr)) {
+    return "gh auth login";
+  }
+  if (failure.exitCode === 0) {
+    return "inspect gh JSON output or update GitHub response parsing";
+  }
+  return "inspect gh output and retry";
 }
 
 function normalizeGitHubItem(value: unknown, kind: GitHubItem["kind"]): GitHubItem {

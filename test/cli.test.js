@@ -36,6 +36,14 @@ if (kind === "issue" && args[1] === "view" && number === 2) {
   }));
   process.exit(0);
 }
+if (kind === "issue" && args[1] === "view" && number === 3) {
+  console.log("{not-json");
+  process.exit(0);
+}
+if (kind === "issue" && args[1] === "view" && number === 4) {
+  process.stderr.write("authentication required: run gh auth login\\n");
+  process.exit(4);
+}
 process.stderr.write("not found\\n");
 process.exit(1);
 `,
@@ -307,6 +315,62 @@ test("start refuses existing work directory for a different issue reference", re
   assert.equal(result.status, 2);
   assert.match(result.stdout, /status: blocked/);
   assert.match(result.stdout, /different issue reference/);
+}));
+
+test("start reports gh authentication failures with command diagnostics", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+
+  const result = slopflow(repo, env, "start", "4");
+
+  assert.equal(result.status, 2);
+  assert.match(result.stdout, /error:/);
+  assert.match(result.stdout, /status: blocked/);
+  assert.match(result.stdout, /GitHub command failed while reading issue work/);
+  assert.match(result.stdout, /command: gh issue view 4 --repo aivv73\/slopflow --json number,title,body,url,state/);
+  assert.match(result.stdout, /exit-code: 4/);
+  assert.match(result.stdout, /authentication required/);
+  assert.match(result.stdout, /next-step: gh auth login/);
+  assert.equal(result.stderr, "");
+}));
+
+test("start reports malformed gh JSON with parse diagnostics", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+
+  const result = slopflow(repo, env, "start", "3");
+
+  assert.equal(result.status, 2);
+  assert.match(result.stdout, /GitHub command failed while reading issue work/);
+  assert.match(result.stdout, /command: gh issue view 3 --repo aivv73\/slopflow --json number,title,body,url,state/);
+  assert.match(result.stdout, /exit-code: 0/);
+  assert.match(result.stdout, /Unexpected token|Expected property name|JSON/);
+  assert.match(result.stdout, /next-step: inspect gh JSON output or update GitHub response parsing/);
+}));
+
+test("start reports issue and PR not found separately from tool failures", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+
+  const result = slopflow(repo, env, "start", "999");
+
+  assert.equal(result.status, 2);
+  assert.match(result.stdout, /Could not read GitHub issue or PR #999/);
+  assert.match(result.stdout, /command: gh issue view 999 .* && gh pr view 999/);
+  assert.match(result.stdout, /exit-code: 1/);
+  assert.match(result.stdout, /detail: not found/);
+  assert.match(result.stdout, /next-step: verify #999 exists in aivv73\/slopflow/);
+}));
+
+test("start reports missing gh executable with spawn diagnostics", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  const withoutGh = { ...env, PATH: mkdtempSync(join(tmpdir(), "slopflow-no-gh-")) };
+
+  const result = slopflow(repo, withoutGh, "start", "2");
+
+  assert.equal(result.status, 2);
+  assert.match(result.stdout, /GitHub command failed while reading issue work/);
+  assert.match(result.stdout, /command: gh issue view 2 --repo aivv73\/slopflow --json number,title,body,url,state/);
+  assert.match(result.stdout, /exit-code: spawn-error/);
+  assert.match(result.stdout, /detail: .*ENOENT|spawn gh ENOENT/);
+  assert.match(result.stdout, /next-step: install GitHub CLI `gh` and ensure it is on PATH/);
 }));
 
 test("test records passed command evidence", requiresJj, withRepo((repo, env) => {
