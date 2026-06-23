@@ -1,3 +1,10 @@
+---
+type: Agent Configuration
+title: Issue tracker — GitHub
+description: Agent-consumable conventions for using GitHub Issues as this repository's issue tracker.
+tags: [agents, issue-tracker, github]
+---
+
 # Issue tracker: GitHub
 
 Issues and PRDs for this repo live as GitHub issues. Use the `gh` CLI for all operations.

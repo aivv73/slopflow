@@ -1,3 +1,10 @@
+---
+type: Agent Configuration
+title: Triage labels
+description: Mapping from canonical engineering-skill triage roles to this repository's issue tracker labels.
+tags: [agents, triage, labels]
+---
+
 # Triage Labels
 
 The skills speak in terms of five canonical triage roles. This file maps those roles to the actual label strings used in this repo's issue tracker.
