@@ -22,6 +22,33 @@ slopflow complete <issue-id>
 
 Slopflow requires Node.js 24 or newer.
 
+## CLI output contract
+
+Slopflow's default command output is an agent-facing, TOON-like key-block format: a named block followed by compact `key: value` fields and a concrete `next-step` or `help[...]` hint when useful.
+
+Example success output:
+
+```text
+status:
+  state: initialized
+  repo: owner/name
+  issue_tracker: github
+  vcs: jj
+  artifact-root: .slopflow/work
+  next-step: slopflow start <issue-id>
+```
+
+Example structured error output:
+
+```text
+error:
+  status: blocked
+  message: <short reason>
+  hint: <optional next action>
+```
+
+Canonical Slopflow status, gate, and error output is written to stdout so agents can parse a single structured stream. Stderr is reserved for debug output and wrapped-command logs; `slopflow test` captures wrapped command stdout/stderr in evidence logs under `.slopflow/work/<issue-id>/evidence/logs/`.
+
 Initialize Slopflow machine config in a Jujutsu-backed GitHub repo:
 
 ```bash
