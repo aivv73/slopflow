@@ -7,6 +7,8 @@ description: Follow Slopflow's controlled issue execution workflow for AI coding
 
 Use this skill when working in a repository that uses Slopflow, or when the user asks you to implement an existing issue through Slopflow.
 
+For a newly onboarded project, run the `setup-matt-pocock-skills` skill first. It records the repository's issue tracker, triage label vocabulary, and domain documentation layout in `docs/agents/*.md` before this execution workflow starts issue work.
+
 ## What it does
 
 - Keeps issue execution scoped to Slopflow's local artifacts and gates.
@@ -28,28 +30,30 @@ The Slopflow CLI output and `.slopflow/work/<issue-id>/` artifacts are canonical
    slopflow status
    ```
 
-2. If Slopflow is not initialized, ask before running:
+2. If this is a new project and `docs/agents/issue-tracker.md`, `docs/agents/triage-labels.md`, or `docs/agents/domain.md` are missing, pause and ask to run `setup-matt-pocock-skills` before Slopflow issue execution.
+
+3. If Slopflow is not initialized, ask before running:
 
    ```bash
    slopflow init
    ```
 
-3. Start scoped issue work:
+4. Start scoped issue work:
 
    ```bash
    slopflow start <issue-id>
    ```
 
-4. Read the canonical contract and goal prompt:
+5. Read the canonical contract and goal prompt:
 
    ```text
    .slopflow/work/<issue-id>/contract.md
    .slopflow/work/<issue-id>/goal-prompt.md
    ```
 
-5. Implement only the contract scope. Preserve existing behavior unless the issue execution contract explicitly changes it.
+6. Implement only the contract scope. Preserve existing behavior unless the issue execution contract explicitly changes it.
 
-6. Capture command-based quality evidence through Slopflow:
+7. Capture command-based quality evidence through Slopflow:
 
    ```bash
    slopflow test <issue-id> --name <gate> -- <command...>
@@ -62,7 +66,7 @@ The Slopflow CLI output and `.slopflow/work/<issue-id>/` artifacts are canonical
    slopflow test <issue-id> --name typecheck -- npm run build
    ```
 
-7. Pause, resume, or cancel local issue work only when the issue lifecycle calls for it:
+8. Pause, resume, or cancel local issue work only when the issue lifecycle calls for it:
 
    ```bash
    slopflow pause <issue-id> --reason <text>
@@ -72,21 +76,21 @@ The Slopflow CLI output and `.slopflow/work/<issue-id>/` artifacts are canonical
 
    These commands preserve artifacts and update local lifecycle state. They must not be treated as process control, VCS cleanup, issue closure, or automatic continuation.
 
-8. Prepare a review packet and inspect reviewer verdict state:
+9. Prepare a review packet and inspect reviewer verdict state:
 
    ```bash
    slopflow review <issue-id>
    ```
 
-9. Do not write `review.json` unless you are acting as a separate human or agent reviewer. The implementer must not self-approve by writing their own reviewer verdict.
+10. Do not write `review.json` unless you are acting as a separate human or agent reviewer. The implementer must not self-approve by writing their own reviewer verdict.
 
-10. Complete only through Slopflow gates:
+11. Complete only through Slopflow gates:
 
    ```bash
    slopflow complete <issue-id>
    ```
 
-11. Report the Slopflow artifacts, tests, review verdict, and completion note in the final response.
+12. Report the Slopflow artifacts, tests, review verdict, and completion note in the final response.
 
 ## Safety rules
 

@@ -10,6 +10,8 @@ Use this skill when working in a repository that uses Slopflow and the agent run
 
 This skill is compatible with Claude Code skill shell execution and with Pi when `pi-skill-interpolation` is installed. The live context below is a snapshot rendered before the model sees the skill. Rerun Slopflow commands before making gate decisions.
 
+For a newly onboarded project, run the `setup-matt-pocock-skills-live` skill first. It records the repository's issue tracker, triage label vocabulary, and domain documentation layout in `docs/agents/*.md` before this execution workflow starts issue work.
+
 If shell execution is disabled by policy, treat the live context as unavailable and run the read-only inspection commands manually.
 
 ## What it does
@@ -27,6 +29,7 @@ If shell execution is disabled by policy, treat the live context as unavailable 
 - Slopflow status: !`slopflow status 2>&1 || true`
 - Jujutsu status: !`jj --no-pager status 2>&1 || true`
 - Active Slopflow work files: !`find .slopflow/work -maxdepth 3 -type f 2>/dev/null | sort | sed -n '1,160p' || true`
+- Agent setup docs: !`for file in docs/agents/issue-tracker.md docs/agents/triage-labels.md docs/agents/domain.md; do test -f "$file" && echo "present: $file" || echo "missing: $file"; done`
 - Domain context snapshot: !`sed -n '1,220p' CONTEXT.md 2>/dev/null || true`
 - Recent ADR snapshot: !`for file in $(find docs/adr -maxdepth 1 -type f 2>/dev/null | sort | tail -5); do echo "--- $file"; sed -n '1,120p' "$file"; done || true`
 
@@ -44,34 +47,36 @@ The Slopflow CLI output and `.slopflow/work/<issue-id>/` artifacts are canonical
    slopflow status
    ```
 
-2. If Slopflow is not initialized, ask before running:
+2. If this is a new project and `docs/agents/issue-tracker.md`, `docs/agents/triage-labels.md`, or `docs/agents/domain.md` are missing, pause and ask to run `setup-matt-pocock-skills-live` before Slopflow issue execution.
+
+3. If Slopflow is not initialized, ask before running:
 
    ```bash
    slopflow init
    ```
 
-3. Start scoped issue work:
+4. Start scoped issue work:
 
    ```bash
    slopflow start <issue-id>
    ```
 
-4. Read the canonical contract and goal prompt:
+5. Read the canonical contract and goal prompt:
 
    ```text
    .slopflow/work/<issue-id>/contract.md
    .slopflow/work/<issue-id>/goal-prompt.md
    ```
 
-5. Implement only the contract scope. Preserve existing behavior unless the issue execution contract explicitly changes it.
+6. Implement only the contract scope. Preserve existing behavior unless the issue execution contract explicitly changes it.
 
-6. Capture command-based quality evidence through Slopflow:
+7. Capture command-based quality evidence through Slopflow:
 
    ```bash
    slopflow test <issue-id> --name <gate> -- <command...>
    ```
 
-7. Pause, resume, or cancel local issue work only when the issue lifecycle calls for it:
+8. Pause, resume, or cancel local issue work only when the issue lifecycle calls for it:
 
    ```bash
    slopflow pause <issue-id> --reason <text>
@@ -81,21 +86,21 @@ The Slopflow CLI output and `.slopflow/work/<issue-id>/` artifacts are canonical
 
    These commands preserve artifacts and update local lifecycle state. They must not be treated as process control, VCS cleanup, issue closure, or automatic continuation.
 
-8. Prepare a review packet and inspect reviewer verdict state:
+9. Prepare a review packet and inspect reviewer verdict state:
 
    ```bash
    slopflow review <issue-id>
    ```
 
-9. Do not write `review.json` unless you are acting as a separate human or agent reviewer. The implementer must not self-approve by writing their own reviewer verdict.
+10. Do not write `review.json` unless you are acting as a separate human or agent reviewer. The implementer must not self-approve by writing their own reviewer verdict.
 
-10. Complete only through Slopflow gates:
+11. Complete only through Slopflow gates:
 
    ```bash
    slopflow complete <issue-id>
    ```
 
-11. Report the Slopflow artifacts, tests, review verdict, and completion note in the final response.
+12. Report the Slopflow artifacts, tests, review verdict, and completion note in the final response.
 
 ## Interpolation safety
 

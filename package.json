@@ -1,6 +1,6 @@
 {
   "name": "slopflow",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Controlled issue execution workflow for AI coding agents",
   "license": "MIT",
   "type": "module",
@@ -21,7 +21,7 @@
     "url": "https://github.com/aivv73/slopflow/issues"
   },
   "bin": {
-    "slopflow": "./dist/cli.js"
+    "slopflow": "dist/cli.js"
   },
   "files": [
     "dist",

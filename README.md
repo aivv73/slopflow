@@ -89,6 +89,20 @@ slopflow complete 2
 
 ## Agent skills
 
+For a new project, install and run the setup skill before the Slopflow execution skill. It records the repository's issue tracker, triage labels, and domain-documentation layout so later engineering skills have the local context they expect:
+
+```bash
+npx skills add aivv73/slopflow --skill setup-matt-pocock-skills
+```
+
+If your agent runtime supports Claude-compatible skill interpolation, use the live setup variant instead:
+
+```bash
+npx skills add aivv73/slopflow --skill setup-matt-pocock-skills-live
+```
+
+The setup skills create OKF-compatible `docs/agents/*.md` concept documents and update the repo's `AGENTS.md` or `CLAUDE.md` instructions. Run one of them first in a newly onboarded project, then initialize Slopflow and use the execution skill.
+
 Install the portable Slopflow skill:
 
 ```bash
@@ -101,7 +115,7 @@ Install the live-context Slopflow skill for Claude Code or Pi with `pi-skill-int
 npx skills add aivv73/slopflow --skill slopflow-live
 ```
 
-The portable skill does not execute shell commands during rendering. The live skill uses Claude-compatible read-only shell interpolation to inject current Slopflow and Jujutsu context.
+The portable skills do not execute shell commands during rendering. The live skills use Claude-compatible read-only shell interpolation to inject setup or Slopflow context.
 
 Agent skills are installed separately through Vercel Skills. The Slopflow npm package distributes the CLI and does not install skills into Claude, Pi, Cursor, or other agent harness directories.
 

@@ -114,6 +114,10 @@ _Avoid_: Agent instructions, domain docs, product spec
 A distributable instruction package that teaches an agent harness how to follow Slopflow safely. Agent skills are distributed through a skills installer such as Vercel Skills rather than being installed or wired into each agent harness by the Slopflow CLI.
 _Avoid_: CLI plugin, runtime integration, built-in agent adapter
 
+**Setup skill**:
+An agent skill intended to run first in a newly onboarded project so the project's issue tracker, triage label vocabulary, and domain documentation layout are recorded before issue execution starts.
+_Avoid_: CLI initializer, automatic installer, Slopflow machine config
+
 **npm package**:
 The Slopflow distribution artifact for the command-line tool. It should contain the executable CLI and package metadata, while agent skill placement is delegated to the skills installer.
 _Avoid_: Universal agent harness installer, skills manager

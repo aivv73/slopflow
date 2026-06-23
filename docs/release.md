@@ -14,9 +14,13 @@ The npm package distributes the Slopflow CLI only. It is expected to contain:
 Agent skills are distributed separately from the repository through Vercel Skills:
 
 ```bash
+npx skills add aivv73/slopflow --skill setup-matt-pocock-skills
+npx skills add aivv73/slopflow --skill setup-matt-pocock-skills-live
 npx skills add aivv73/slopflow --skill slopflow
 npx skills add aivv73/slopflow --skill slopflow-live
 ```
+
+The setup skills are intended to be run first in newly onboarded projects. They configure `docs/agents/*.md` as OKF-compatible agent configuration documents before agents use the Slopflow execution skills.
 
 The npm package must not install skills into Claude, Pi, Cursor, or other agent harness directories.
 
