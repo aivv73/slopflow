@@ -44,6 +44,8 @@ _Avoid_: Publish, push, merge, close issue
 **Reviewer verdict**:
 The canonical structured review decision in `.slopflow/work/<issue-id>/review.json` that states whether the issue work is complete or requires changes.
 _Avoid_: Review notes, approval comment
+It uses schema version 1 with `verdict`, `reviewer`, `reviewed_at`, `summary`, and `required_changes`. A complete verdict must have no required changes; a changes-requested verdict must list actionable required changes.
+If `review.json` exists but does not match the schema, the review command treats it as a blocked gate artifact and exits with code 2 after updating the review packet.
 
 **Test evidence**:
 The canonical structured test record in `.slopflow/work/<issue-id>/evidence/tests.json`, with raw command logs stored beside it, that proves which quality gates ran and whether they passed.
@@ -73,6 +75,11 @@ It refuses to run unless the issue work directory and `status.json` already exis
 **Review command**:
 The Slopflow action that prepares a review packet and reports whether a reviewer verdict exists and approves completion.
 _Avoid_: Reviewer agent, automatic approval
+Its v0 CLI shape is `slopflow review <issue-id>`, where the issue id is required and numeric, initialized machine config is required, and the issue work directory plus `status.json` must exist.
+It never creates `review.json`; reviewer verdicts are written by a separate human or agent reviewer so Slopflow does not self-approve work.
+Its review packet is a hybrid artifact: it inlines the contract, test evidence summary, Jujutsu status, changed files, reviewer instructions, and a bounded diff excerpt, while referencing full logs and commands for deeper inspection. The v0 inline diff limit is 50,000 characters.
+It does not block when test evidence is missing; instead it marks missing evidence in the packet and output so the reviewer can request changes. Completion remains the strict evidence gate.
+Its output statuses are `pending` when `review.json` is missing, `complete` when the verdict approves completion, `changes-requested` when the verdict requests changes, and `blocked` when the verdict artifact is invalid.
 
 **Machine config**:
 The minimal `.slopflow/config.json` file that stores CLI-readable project settings such as artifact root, issue tracker, and version-control type.

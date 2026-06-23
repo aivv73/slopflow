@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 const SCHEMA_VERSION = 1;
 const DEFAULT_ARTIFACT_ROOT = ".slopflow/work";
 const DEFAULT_PRS_AS_REQUEST_SURFACE = true;
+const REVIEW_DIFF_LIMIT = 50_000;
 
 type MachineConfig = {
   schema_version: number;
@@ -62,6 +63,15 @@ type TestEvidence = {
   attempts: TestAttempt[];
 };
 
+type ReviewVerdict = {
+  schema_version: 1;
+  verdict: "complete" | "changes-requested";
+  reviewer: string;
+  reviewed_at: string;
+  summary: string;
+  required_changes: string[];
+};
+
 class SlopflowError extends Error {
   constructor(
     message: string,
@@ -87,6 +97,9 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     if (command === "test") {
       return testCommand(args);
     }
+    if (command === "review") {
+      return reviewCommand(args[0]);
+    }
     printHelp();
     return 0;
   } catch (error) {
@@ -106,6 +119,75 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   }
 }
 
+function reviewCommand(issueId: string | undefined): number {
+  if (!issueId) {
+    throw new SlopflowError("Missing issue id.", "Run `slopflow review <issue-id>`.", 2);
+  }
+  if (!/^\d+$/.test(issueId)) {
+    throw new SlopflowError("Issue id must be a plain number for the configured repository.", undefined, 2);
+  }
+
+  const root = findRepoRoot(process.cwd());
+  if (!root) {
+    throw new SlopflowError("Could not find a repository root.", "Run Slopflow inside an initialized repository.", 2);
+  }
+  const config = readMachineConfig(root);
+  const workDir = join(root, config.artifact_root, issueId);
+  const workStatus = readWorkStatus(workDir, issueId, "review");
+  const issue = workStatus.issue;
+
+  const testsPath = join(workDir, "evidence", "tests.json");
+  const testEvidenceStatus = existsSync(testsPath) ? "present" : "missing";
+  const reviewPath = join(workDir, "review.json");
+  const packetPath = join(workDir, "review-packet.md");
+  writeFileSync(packetPath, buildReviewPacket({ root, workDir, issue, testsPath }), "utf8");
+
+  if (!existsSync(reviewPath)) {
+    printBlock("review", {
+      status: "pending",
+      issue: `${issue.provider}:${issue.repo}#${issue.number}`,
+      packet: relativeToCwd(packetPath),
+      verdict: "missing",
+      "test-evidence": testEvidenceStatus,
+      "next-step": "ask reviewer to write review.json",
+    });
+    return 0;
+  }
+
+  const validation = readAndValidateReviewVerdict(reviewPath);
+  if (!validation.ok) {
+    printBlock("review", {
+      status: "blocked",
+      issue: `${issue.provider}:${issue.repo}#${issue.number}`,
+      packet: relativeToCwd(packetPath),
+      verdict: "invalid",
+      "test-evidence": testEvidenceStatus,
+      error: validation.error,
+      "next-step": "fix review.json",
+    });
+    return 2;
+  }
+
+  const verdict = validation.verdict.verdict;
+  printBlock("review", {
+    status: verdict === "complete" ? "complete" : "changes-requested",
+    issue: `${issue.provider}:${issue.repo}#${issue.number}`,
+    packet: relativeToCwd(packetPath),
+    verdict,
+    "test-evidence": testEvidenceStatus,
+    "next-step": verdict === "complete" ? `slopflow complete ${issueId}` : "address required changes",
+  });
+  return 0;
+}
+
+function readAndValidateReviewVerdict(path: string): { ok: true; verdict: ReviewVerdict } | { ok: false; error: string } {
+  try {
+    return validateReviewVerdict(JSON.parse(readFileSync(path, "utf8")));
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "review.json is invalid" };
+  }
+}
+
 function testCommand(args: string[]): number {
   const { issueId, gateName, command } = parseTestArgs(args);
   const root = findRepoRoot(process.cwd());
@@ -114,23 +196,7 @@ function testCommand(args: string[]): number {
   }
   const config = readMachineConfig(root);
   const workDir = join(root, config.artifact_root, issueId);
-  const workStatusPath = join(workDir, "status.json");
-  if (!existsSync(workStatusPath)) {
-    throw new SlopflowError(
-      `Issue work status not found for #${issueId}.`,
-      `Run \`slopflow start ${issueId}\` before capturing test evidence.`,
-      2,
-    );
-  }
-
-  const workStatus = readJson(workStatusPath) as { issue?: IssueReference };
-  if (!workStatus.issue) {
-    throw new SlopflowError(
-      `Issue work status is missing issue metadata for #${issueId}.`,
-      "Inspect the work directory before retrying.",
-      2,
-    );
-  }
+  const workStatus = readWorkStatus(workDir, issueId, "test");
 
   const evidenceDir = join(workDir, "evidence");
   const logsDir = join(evidenceDir, "logs");
@@ -198,6 +264,26 @@ function testCommand(args: string[]): number {
     "next-step": status === "passed" ? `slopflow review ${issueId}` : "fix implementation or create reviewed test exception",
   });
   return exitCode;
+}
+
+function readWorkStatus(workDir: string, issueId: string, command: "test" | "review"): { issue: IssueReference } {
+  const workStatusPath = join(workDir, "status.json");
+  if (!existsSync(workStatusPath)) {
+    throw new SlopflowError(
+      `Issue work status not found for #${issueId}.`,
+      `Run \`slopflow start ${issueId}\` before ${command === "test" ? "capturing test evidence" : "preparing review"}.`,
+      2,
+    );
+  }
+  const workStatus = readJson(workStatusPath) as { issue?: IssueReference };
+  if (!workStatus.issue) {
+    throw new SlopflowError(
+      `Issue work status is missing issue metadata for #${issueId}.`,
+      "Inspect the work directory before retrying.",
+      2,
+    );
+  }
+  return { issue: workStatus.issue };
 }
 
 function parseTestArgs(args: string[]): { issueId: string; gateName: string; command: string[] } {
@@ -494,6 +580,128 @@ function buildNextSteps(issueReference: IssueReference): string {
     `6. Do not mark complete until reviewer verdict and required evidence exist.\n`;
 }
 
+function buildReviewPacket({ root, workDir, issue, testsPath }: { root: string; workDir: string; issue: IssueReference; testsPath: string }): string {
+  const contractPath = join(workDir, "contract.md");
+  const contract = existsSync(contractPath) ? readFileSync(contractPath, "utf8") : "_Missing contract.md_";
+  const testsSummary = buildTestEvidenceSummary(testsPath);
+  const jjStatus = runTextCommand("jj", ["--no-pager", "status"], root);
+  const diff = runTextCommand("jj", ["--no-pager", "diff", "--git"], root);
+  const boundedDiff = boundText(diff, REVIEW_DIFF_LIMIT);
+  const changedFiles = changedFilesFromDiff(diff);
+
+  return `# Review Packet\n\n` +
+    `## Issue Reference\n\n` +
+    `Issue: ${issue.provider}:${issue.repo}#${issue.number}\n\n` +
+    `Kind: ${issue.kind}\n\n` +
+    `## Reviewer Instructions\n\n` +
+    `Review the diff against the issue execution contract. Slopflow does not create \`review.json\`; write it only if you are the reviewer.\n\n` +
+    `Valid \`review.json\` schema:\n\n` +
+    "```json\n" +
+    JSON.stringify({
+      schema_version: 1,
+      verdict: "complete | changes-requested",
+      reviewer: "reviewer-name",
+      reviewed_at: new Date(0).toISOString(),
+      summary: "Review summary",
+      required_changes: [],
+    }, null, 2) +
+    "\n```\n\n" +
+    `- Use \`verdict: "complete"\` only when no required changes remain.\n` +
+    `- Use \`verdict: "changes-requested"\` with actionable \`required_changes\`.\n\n` +
+    `## Contract\n\n` +
+    "```markdown\n" + contract + "\n```\n\n" +
+    `## Test Evidence Summary\n\n${testsSummary}\n\n` +
+    `## Jujutsu Status\n\n` +
+    "```text\n" + jjStatus + "\n```\n\n" +
+    `## Changed Files\n\n${changedFiles.length > 0 ? changedFiles.map((file) => `- ${file}`).join("\n") : "_No changed files detected._"}\n\n` +
+    `## Diff Excerpt\n\n` +
+    `Inline diff limit: ${REVIEW_DIFF_LIMIT} characters. Run \`jj --no-pager diff --git\` for the full diff.\n\n` +
+    "```diff\n" + boundedDiff.text + "\n```\n" +
+    (boundedDiff.truncated ? "\n_Diff excerpt truncated._\n" : "");
+}
+
+function buildTestEvidenceSummary(testsPath: string): string {
+  if (!existsSync(testsPath)) {
+    return "Status: missing\n\nNo `evidence/tests.json` exists yet.";
+  }
+  const evidence = readTestEvidence(testsPath);
+  const latestEntries = Object.entries(evidence.latest);
+  if (latestEntries.length === 0) {
+    return "Status: missing\n\n`evidence/tests.json` exists but has no latest gate results.";
+  }
+  const lines = ["Status: present", "", `Attempts: ${evidence.attempts.length}`, "", "Latest gates:"];
+  for (const [name, latest] of latestEntries) {
+    lines.push(`- ${name}: ${latest.status} (exit ${latest.exit_code}, log ${latest.log})`);
+  }
+  return lines.join("\n");
+}
+
+function runTextCommand(command: string, args: string[], cwd: string): string {
+  const result = spawnSync(command, args, { cwd, encoding: "utf8" });
+  if (result.error) {
+    return `unavailable: ${result.error.message}`;
+  }
+  return `${result.stdout ?? ""}${result.stderr ?? ""}`.trimEnd();
+}
+
+function boundText(text: string, limit: number): { text: string; truncated: boolean } {
+  if (text.length <= limit) {
+    return { text, truncated: false };
+  }
+  return { text: text.slice(0, limit), truncated: true };
+}
+
+function changedFilesFromDiff(diff: string): string[] {
+  const files = new Set<string>();
+  for (const line of diff.split("\n")) {
+    const match = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
+    if (match?.[2]) {
+      files.add(match[2]);
+    }
+  }
+  return [...files].sort();
+}
+
+function validateReviewVerdict(value: unknown): { ok: true; verdict: ReviewVerdict } | { ok: false; error: string } {
+  const verdict = value as Partial<ReviewVerdict>;
+  if (!verdict || typeof verdict !== "object") {
+    return { ok: false, error: "review.json must be an object" };
+  }
+  if (verdict.schema_version !== 1) {
+    return { ok: false, error: "schema_version must be 1" };
+  }
+  if (verdict.verdict !== "complete" && verdict.verdict !== "changes-requested") {
+    return { ok: false, error: "verdict must be complete or changes-requested" };
+  }
+  if (!nonEmptyString(verdict.reviewer)) {
+    return { ok: false, error: "reviewer must be a non-empty string" };
+  }
+  if (!nonEmptyString(verdict.reviewed_at) || !isIsoTimestamp(verdict.reviewed_at)) {
+    return { ok: false, error: "reviewed_at must be an ISO timestamp" };
+  }
+  if (!nonEmptyString(verdict.summary)) {
+    return { ok: false, error: "summary must be a non-empty string" };
+  }
+  if (!Array.isArray(verdict.required_changes) || !verdict.required_changes.every(nonEmptyString)) {
+    return { ok: false, error: "required_changes must be an array of non-empty strings" };
+  }
+  if (verdict.verdict === "complete" && verdict.required_changes.length !== 0) {
+    return { ok: false, error: "complete verdict requires empty required_changes" };
+  }
+  if (verdict.verdict === "changes-requested" && verdict.required_changes.length === 0) {
+    return { ok: false, error: "changes-requested verdict requires required_changes" };
+  }
+  return { ok: true, verdict: verdict as ReviewVerdict };
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isIsoTimestamp(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value) && !Number.isNaN(Date.parse(value));
+}
+
 function indentBlock(value: string): string {
   return value
     .split("\n")
@@ -736,7 +944,7 @@ function printBlock(name: string, values: Record<string, unknown>, stream: NodeJ
 
 function printHelp(): void {
   process.stdout.write(
-    `Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  start <issue-id>\n  test <issue-id> --name <gate> -- <command...>\n`,
+    `Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  start <issue-id>\n  test <issue-id> --name <gate> -- <command...>\n  review <issue-id>\n`,
   );
 }
 

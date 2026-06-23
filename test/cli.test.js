@@ -338,3 +338,137 @@ test("test validates gate name and command separator", requiresJj, withRepo((rep
   assert.equal(missingSeparator.status, 2);
   assert.match(missingSeparator.stderr, /Missing `--`/);
 }));
+
+test("review creates packet and reports pending when review verdict is missing", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  writeFileSync(join(repo, "changed.txt"), "review me\n", "utf8");
+
+  const result = slopflow(repo, env, "review", "2");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /review:/);
+  assert.match(result.stdout, /status: pending/);
+  assert.match(result.stdout, /verdict: missing/);
+  assert.match(result.stdout, /test-evidence: missing/);
+  assert.match(result.stdout, /next-step: ask reviewer to write review.json/);
+  assert.equal(existsSync(join(repo, ".slopflow", "work", "2", "review.json")), false);
+
+  const packet = readFileSync(join(repo, ".slopflow", "work", "2", "review-packet.md"), "utf8");
+  assert.match(packet, /# Review Packet/);
+  assert.match(packet, /Issue: github:aivv73\/slopflow#2/);
+  assert.match(packet, /## Contract/);
+  assert.match(packet, /## Test Evidence Summary/);
+  assert.match(packet, /Status: missing/);
+  assert.match(packet, /## Jujutsu Status/);
+  assert.match(packet, /## Changed Files/);
+  assert.match(packet, /changed.txt/);
+  assert.match(packet, /## Diff Excerpt/);
+  assert.match(packet, /Inline diff limit: 50000 characters/);
+  assert.match(packet, /Valid `review.json` schema/);
+}));
+
+test("review packet marks truncated diff excerpt", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  writeFileSync(join(repo, "large-change.txt"), `${"x".repeat(60_000)}\n`, "utf8");
+
+  const result = slopflow(repo, env, "review", "2");
+
+  assert.equal(result.status, 0, result.stderr);
+  const packet = readFileSync(join(repo, ".slopflow", "work", "2", "review-packet.md"), "utf8");
+  assert.match(packet, /Diff excerpt truncated/);
+  assert.match(packet, /Inline diff limit: 50000 characters/);
+}));
+
+test("review reports complete verdict", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  assert.equal(slopflow(repo, env, "test", "2", "--name", "unit", "--", process.execPath, "-e", "console.log('ok')").status, 0);
+  writeFileSync(join(repo, ".slopflow", "work", "2", "review.json"), JSON.stringify({
+    schema_version: 1,
+    verdict: "complete",
+    reviewer: "pi-reviewer",
+    reviewed_at: new Date().toISOString(),
+    summary: "Looks good.",
+    required_changes: [],
+  }), "utf8");
+
+  const result = slopflow(repo, env, "review", "2");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /status: complete/);
+  assert.match(result.stdout, /verdict: complete/);
+  assert.match(result.stdout, /test-evidence: present/);
+  assert.match(result.stdout, /next-step: slopflow complete 2/);
+}));
+
+test("review reports changes-requested verdict", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  writeFileSync(join(repo, ".slopflow", "work", "2", "review.json"), JSON.stringify({
+    schema_version: 1,
+    verdict: "changes-requested",
+    reviewer: "pi-reviewer",
+    reviewed_at: new Date().toISOString(),
+    summary: "Needs work.",
+    required_changes: ["Add test evidence."],
+  }), "utf8");
+
+  const result = slopflow(repo, env, "review", "2");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /status: changes-requested/);
+  assert.match(result.stdout, /verdict: changes-requested/);
+  assert.match(result.stdout, /next-step: address required changes/);
+}));
+
+test("review blocks invalid review verdict after updating packet", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  writeFileSync(join(repo, ".slopflow", "work", "2", "review.json"), JSON.stringify({
+    schema_version: 1,
+    verdict: "complete",
+    reviewer: "pi-reviewer",
+    reviewed_at: new Date().toISOString(),
+    summary: "Contradictory.",
+    required_changes: ["Still needs work."],
+  }), "utf8");
+
+  const result = slopflow(repo, env, "review", "2");
+
+  assert.equal(result.status, 2);
+  assert.match(result.stdout, /status: blocked/);
+  assert.match(result.stdout, /verdict: invalid/);
+  assert.match(result.stdout, /fix review.json/);
+  assert.equal(existsSync(join(repo, ".slopflow", "work", "2", "review-packet.md")), true);
+}));
+
+test("review blocks malformed review json with review output", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  writeFileSync(join(repo, ".slopflow", "work", "2", "review.json"), "{ not json", "utf8");
+
+  const result = slopflow(repo, env, "review", "2");
+
+  assert.equal(result.status, 2);
+  assert.match(result.stdout, /review:/);
+  assert.match(result.stdout, /status: blocked/);
+  assert.match(result.stdout, /verdict: invalid/);
+  assert.match(result.stdout, /packet: \.slopflow\/work\/2\/review-packet.md/);
+  assert.equal(result.stderr, "");
+  assert.equal(existsSync(join(repo, ".slopflow", "work", "2", "review-packet.md")), true);
+}));
+
+test("review refuses missing work directory and non-numeric issue id", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+
+  const missingWork = slopflow(repo, env, "review", "2");
+  assert.equal(missingWork.status, 2);
+  assert.match(missingWork.stderr, /status: blocked/);
+  assert.match(missingWork.stderr, /slopflow start 2/);
+
+  const invalidId = slopflow(repo, env, "review", "abc");
+  assert.equal(invalidId.status, 2);
+  assert.match(invalidId.stderr, /Issue id must be a plain number/);
+}));

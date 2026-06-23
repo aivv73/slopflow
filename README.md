@@ -11,6 +11,7 @@ slopflow init
 slopflow status
 slopflow start <issue-id>
 slopflow test <issue-id> --name <gate> -- <command...>
+slopflow review <issue-id>
 ```
 
 ## Usage
@@ -53,6 +54,14 @@ slopflow test 2 --name typecheck -- npm run build
 ```
 
 `test` writes structured evidence and raw logs under `.slopflow/work/<issue-id>/evidence/`, then returns the wrapped command's exit code.
+
+Prepare a review packet and validate reviewer verdict state:
+
+```bash
+slopflow review 2
+```
+
+`review` writes `.slopflow/work/<issue-id>/review-packet.md` but never creates `review.json`. A separate human or agent reviewer must write the verdict.
 
 ## Development
 
