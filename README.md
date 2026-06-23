@@ -72,6 +72,22 @@ slopflow complete 2
 
 `complete` generates `completion-note.md` when missing, preserves an existing note, updates local `status.json`, and never publishes, pushes, merges, opens PRs, or closes issues.
 
+## Agent skills
+
+Install the portable Slopflow skill:
+
+```bash
+npx skills add aivv73/slopflow --skill slopflow
+```
+
+Install the live-context Slopflow skill for Claude Code or Pi with `pi-skill-interpolation`:
+
+```bash
+npx skills add aivv73/slopflow --skill slopflow-live
+```
+
+The portable skill does not execute shell commands during rendering. The live skill uses Claude-compatible read-only shell interpolation to inject current Slopflow and Jujutsu context.
+
 ## Development
 
 Slopflow uses TypeScript and npm for the CLI implementation.
