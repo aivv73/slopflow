@@ -17,6 +17,8 @@ slopflow complete <issue-id>
 
 ## Usage
 
+Slopflow requires Node.js 24 or newer.
+
 Initialize Slopflow machine config in a Jujutsu-backed GitHub repo:
 
 ```bash
@@ -122,7 +124,7 @@ npm unlink -g slopflow
 
 ## Development
 
-Slopflow uses TypeScript and npm for the CLI implementation.
+Slopflow uses TypeScript and npm for the CLI implementation. Use Node.js 24 or newer.
 
 Install dependencies:
 
