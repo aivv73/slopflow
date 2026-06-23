@@ -169,6 +169,59 @@ test("status blocks before init", requiresJj, withRepo((repo, env) => {
   assert.match(result.stderr, /Run `slopflow init` first/);
 }));
 
+test("no-args home view reports uninitialized repository", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /slopflow:/);
+  assert.match(result.stdout, /bin:/);
+  assert.match(result.stdout, /description: Controlled issue execution for AI coding agents\./);
+  assert.match(result.stdout, /state: uninitialized/);
+  assert.match(result.stdout, /repo-root:/);
+  assert.match(result.stdout, /vcs: jj/);
+  assert.match(result.stdout, /next-step: slopflow init/);
+}));
+
+test("no-args home view reports initialized repository state", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  mkdirSync(join(repo, ".slopflow", "work", "1"), { recursive: true });
+
+  const result = slopflow(repo, env);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /slopflow:/);
+  assert.match(result.stdout, /bin:/);
+  assert.match(result.stdout, /description: Controlled issue execution for AI coding agents\./);
+  assert.match(result.stdout, /state: initialized/);
+  assert.match(result.stdout, /repo: aivv73\/slopflow/);
+  assert.match(result.stdout, /issue_tracker: github/);
+  assert.match(result.stdout, /vcs: jj/);
+  assert.match(result.stdout, /artifact-root: \.slopflow\/work/);
+  assert.match(result.stdout, /current-jj-change:/);
+  assert.match(result.stdout, /active-work-count: 1/);
+  assert.match(result.stdout, /next-step: slopflow start <issue-id>/);
+}));
+
+test("help flag prints concise command reference", () => {
+  const result = run([process.execPath, cliPath, "--help"], process.cwd());
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Usage: slopflow <command>/);
+  assert.match(result.stdout, /Commands:/);
+  assert.match(result.stdout, /status/);
+  assert.match(result.stdout, /complete <issue-id>/);
+});
+
+test("unknown commands return structured error and nonzero exit", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env, "bogus");
+
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /error:/);
+  assert.match(result.stderr, /status: blocked/);
+  assert.match(result.stderr, /Unknown command: bogus/);
+  assert.match(result.stderr, /slopflow --help/);
+}));
+
 test("start creates bootstrap artifacts for a GitHub issue", requiresJj, withRepo((repo, env) => {
   assert.equal(slopflow(repo, env, "init").status, 0);
 
