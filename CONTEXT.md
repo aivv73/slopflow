@@ -47,6 +47,24 @@ It preserves existing `status.json` fields and sets `status: "complete"` plus `c
 It verifies Jujutsu status is readable but does not require an empty diff, because the working copy commit is the issue change in Jujutsu.
 Its output status is `complete` on success or `blocked` when a required local artifact gate is missing or failing, with exit code 2 for blocked completion.
 
+**Pause**:
+The Slopflow action that records an intentional temporary stop for issue work by writing a local pause note and marking the work status as paused.
+_Avoid_: Kill process, stop agent, stash changes
+
+**Resume**:
+The Slopflow action that rehydrates local issue work context and, when work is paused, marks it active again without running quality gates or review gates.
+_Avoid_: Restart agent, continue automatically, run pending work
+
+**Cancel**:
+The Slopflow action that records an intentional local cancellation of issue work while preserving the work directory and evidence for inspection.
+_Avoid_: Delete artifacts, close issue, abandon Jujutsu change, abort process
+
+**Lifecycle status**:
+The local issue work state stored in `status.json`, such as active, paused, cancelled, or complete.
+_Avoid_: Gate result, process state, GitHub issue state
+
+`blocked` is a command result for an unsatisfied gate, not a lifecycle status.
+
 
 **Reviewer verdict**:
 The canonical structured review decision in `.slopflow/work/<issue-id>/review.json` that states whether the issue work is complete or requires changes.

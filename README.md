@@ -10,6 +10,9 @@ The first vertical slice provides:
 slopflow init
 slopflow status
 slopflow start <issue-id>
+slopflow pause <issue-id> --reason <text>
+slopflow resume <issue-id>
+slopflow cancel <issue-id> --reason <text>
 slopflow test <issue-id> --name <gate> -- <command...>
 slopflow review <issue-id>
 slopflow complete <issue-id>
@@ -48,6 +51,16 @@ next-steps.md
 ```
 
 It does not create placeholder evidence, review, or completion files.
+
+Pause, resume, or cancel local issue work without running gates or mutating Jujutsu history:
+
+```bash
+slopflow pause 2 --reason "waiting for external review"
+slopflow resume 2
+slopflow cancel 2 --reason "superseded by another issue"
+```
+
+Lifecycle commands preserve the work directory and record local status only. They do not push, close issues, publish, delete evidence, or abandon Jujutsu changes.
 
 Capture command-based quality evidence for started issue work:
 

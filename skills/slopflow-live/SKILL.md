@@ -1,6 +1,7 @@
 ---
 name: slopflow-live
 description: Follow Slopflow's controlled issue execution workflow with live read-only project context injected through Claude-compatible skill shell interpolation.
+allowed-tools: Bash
 ---
 
 # Slopflow Live
@@ -11,35 +12,25 @@ This skill is compatible with Claude Code skill shell execution and with Pi when
 
 If shell execution is disabled by policy, treat the live context as unavailable and run the read-only inspection commands manually.
 
-## Live Slopflow status
+## What it does
 
-```!
-slopflow status 2>&1 || true
-```
+- Injects a read-only snapshot of current Slopflow, Jujutsu, work artifact, domain, and ADR context before the model sees the skill.
+- Keeps issue execution scoped to Slopflow's local artifacts and gates.
+- Starts issue work with `slopflow start <issue-id>`.
+- Records test evidence with `slopflow test <issue-id> --name <gate> -- <command...>`.
+- Supports local lifecycle state with `pause`, `resume`, and `cancel` without controlling an agent runtime.
+- Prepares review packets with `slopflow review <issue-id>` without self-approval.
+- Completes work only through `slopflow complete <issue-id>` after test evidence and reviewer approval.
 
-## Live Jujutsu status
+## Live context
 
-```!
-jj --no-pager status 2>&1 || true
-```
+- Slopflow status: !`slopflow status 2>&1 || true`
+- Jujutsu status: !`jj --no-pager status 2>&1 || true`
+- Active Slopflow work files: !`find .slopflow/work -maxdepth 3 -type f 2>/dev/null | sort | sed -n '1,160p' || true`
+- Domain context snapshot: !`sed -n '1,220p' CONTEXT.md 2>/dev/null || true`
+- Recent ADR snapshot: !`for file in $(find docs/adr -maxdepth 1 -type f 2>/dev/null | sort | tail -5); do echo "--- $file"; sed -n '1,120p' "$file"; done || true`
 
-## Active Slopflow work files
-
-```!
-find .slopflow/work -maxdepth 3 -type f 2>/dev/null | sort | sed -n '1,160p' || true
-```
-
-## Domain context snapshot
-
-```!
-sed -n '1,220p' CONTEXT.md 2>/dev/null || true
-```
-
-## Recent ADR snapshot
-
-```!
-for file in $(find docs/adr -maxdepth 1 -type f 2>/dev/null | sort | tail -5); do echo "--- $file"; sed -n '1,120p' "$file"; done || true
-```
+Interpolation requires the `allowed-tools` frontmatter above. Without a Bash permission, `!command` patterns are passed through as literal text by Agent Skills implementations.
 
 ## Core rule
 
@@ -80,21 +71,31 @@ The Slopflow CLI output and `.slopflow/work/<issue-id>/` artifacts are canonical
    slopflow test <issue-id> --name <gate> -- <command...>
    ```
 
-7. Prepare a review packet and inspect reviewer verdict state:
+7. Pause, resume, or cancel local issue work only when the issue lifecycle calls for it:
+
+   ```bash
+   slopflow pause <issue-id> --reason <text>
+   slopflow resume <issue-id>
+   slopflow cancel <issue-id> --reason <text>
+   ```
+
+   These commands preserve artifacts and update local lifecycle state. They must not be treated as process control, VCS cleanup, issue closure, or automatic continuation.
+
+8. Prepare a review packet and inspect reviewer verdict state:
 
    ```bash
    slopflow review <issue-id>
    ```
 
-8. Do not write `review.json` unless you are acting as a separate human or agent reviewer. The implementer must not self-approve by writing their own reviewer verdict.
+9. Do not write `review.json` unless you are acting as a separate human or agent reviewer. The implementer must not self-approve by writing their own reviewer verdict.
 
-9. Complete only through Slopflow gates:
+10. Complete only through Slopflow gates:
 
    ```bash
    slopflow complete <issue-id>
    ```
 
-10. Report the Slopflow artifacts, tests, review verdict, and completion note in the final response.
+11. Report the Slopflow artifacts, tests, review verdict, and completion note in the final response.
 
 ## Interpolation safety
 
@@ -116,8 +117,10 @@ The interpolation commands in this skill are read-only inspection commands. They
 slopflow init
 slopflow status
 slopflow start <issue-id>
+slopflow pause <issue-id> --reason <text>
+slopflow resume <issue-id>
+slopflow cancel <issue-id> --reason <text>
 slopflow test <issue-id> --name <gate> -- <command...>
 slopflow review <issue-id>
 slopflow complete <issue-id>
 ```
-

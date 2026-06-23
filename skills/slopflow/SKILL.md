@@ -7,6 +7,15 @@ description: Follow Slopflow's controlled issue execution workflow for AI coding
 
 Use this skill when working in a repository that uses Slopflow, or when the user asks you to implement an existing issue through Slopflow.
 
+## What it does
+
+- Keeps issue execution scoped to Slopflow's local artifacts and gates.
+- Starts issue work with `slopflow start <issue-id>`.
+- Records test evidence with `slopflow test <issue-id> --name <gate> -- <command...>`.
+- Supports local lifecycle state with `pause`, `resume`, and `cancel` without controlling an agent runtime.
+- Prepares review packets with `slopflow review <issue-id>` without self-approval.
+- Completes work only through `slopflow complete <issue-id>` after test evidence and reviewer approval.
+
 ## Core rule
 
 The Slopflow CLI output and `.slopflow/work/<issue-id>/` artifacts are canonical. Do not manually invent, rewrite, or bypass Slopflow artifacts when a CLI command exists for that step.
@@ -53,21 +62,31 @@ The Slopflow CLI output and `.slopflow/work/<issue-id>/` artifacts are canonical
    slopflow test <issue-id> --name typecheck -- npm run build
    ```
 
-7. Prepare a review packet and inspect reviewer verdict state:
+7. Pause, resume, or cancel local issue work only when the issue lifecycle calls for it:
+
+   ```bash
+   slopflow pause <issue-id> --reason <text>
+   slopflow resume <issue-id>
+   slopflow cancel <issue-id> --reason <text>
+   ```
+
+   These commands preserve artifacts and update local lifecycle state. They must not be treated as process control, VCS cleanup, issue closure, or automatic continuation.
+
+8. Prepare a review packet and inspect reviewer verdict state:
 
    ```bash
    slopflow review <issue-id>
    ```
 
-8. Do not write `review.json` unless you are acting as a separate human or agent reviewer. The implementer must not self-approve by writing their own reviewer verdict.
+9. Do not write `review.json` unless you are acting as a separate human or agent reviewer. The implementer must not self-approve by writing their own reviewer verdict.
 
-9. Complete only through Slopflow gates:
+10. Complete only through Slopflow gates:
 
    ```bash
    slopflow complete <issue-id>
    ```
 
-10. Report the Slopflow artifacts, tests, review verdict, and completion note in the final response.
+11. Report the Slopflow artifacts, tests, review verdict, and completion note in the final response.
 
 ## Safety rules
 
@@ -85,8 +104,10 @@ The Slopflow CLI output and `.slopflow/work/<issue-id>/` artifacts are canonical
 slopflow init
 slopflow status
 slopflow start <issue-id>
+slopflow pause <issue-id> --reason <text>
+slopflow resume <issue-id>
+slopflow cancel <issue-id> --reason <text>
 slopflow test <issue-id> --name <gate> -- <command...>
 slopflow review <issue-id>
 slopflow complete <issue-id>
 ```
-

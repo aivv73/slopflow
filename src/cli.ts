@@ -72,6 +72,15 @@ type ReviewVerdict = {
   required_changes: string[];
 };
 
+type WorkLifecycleStatus = "started" | "active" | "paused" | "cancelled" | "complete";
+
+type WorkStatus = {
+  schema_version?: number;
+  status?: WorkLifecycleStatus | string;
+  issue: IssueReference;
+  [key: string]: unknown;
+};
+
 class SlopflowError extends Error {
   constructor(
     message: string,
@@ -96,6 +105,15 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     }
     if (command === "test") {
       return testCommand(args);
+    }
+    if (command === "pause") {
+      return lifecycleCommand("pause", args);
+    }
+    if (command === "resume") {
+      return lifecycleCommand("resume", args);
+    }
+    if (command === "cancel") {
+      return lifecycleCommand("cancel", args);
     }
     if (command === "review") {
       return reviewCommand(args[0]);
@@ -140,6 +158,10 @@ function completeCommand(issueId: string | undefined): number {
   const workStatus = readWorkStatus(workDir, issueId, "complete");
   const issue = workStatus.issue;
   const issueText = `${issue.provider}:${issue.repo}#${issue.number}`;
+
+  if (workStatus.status === "cancelled") {
+    return completeBlocked(issueText, "issue work is cancelled", `inspect ${relativeToCwd(join(workDir, "cancel-note.md"))} or start new work`, workDir);
+  }
 
   const contractPath = join(workDir, "contract.md");
   if (!existsSync(contractPath)) {
@@ -395,16 +417,141 @@ function testCommand(args: string[]): number {
   return exitCode;
 }
 
-function readWorkStatus(workDir: string, issueId: string, command: "test" | "review" | "complete"): { issue: IssueReference } {
+function lifecycleCommand(action: "pause" | "resume" | "cancel", args: string[]): number {
+  const issueId = args[0];
+  const reason = action === "resume" ? undefined : parseReasonArg(args.slice(1), action);
+  const { root, workDir, workStatus, statusPath } = readLifecycleContext(issueId, action);
+  const issue = workStatus.issue;
+  const issueText = `${issue.provider}:${issue.repo}#${issue.number}`;
+  const now = new Date().toISOString();
+
+  if (action === "pause") {
+    if (workStatus.status === "cancelled") {
+      throw new SlopflowError("Cancelled issue work cannot be paused.", `Inspect ${relativeToCwd(join(workDir, "cancel-note.md"))}.`, 2);
+    }
+    if (workStatus.status === "complete") {
+      throw new SlopflowError("Complete issue work cannot be paused.", `Inspect ${relativeToCwd(join(workDir, "completion-note.md"))}.`, 2);
+    }
+    const pauseNotePath = join(workDir, "pause-note.md");
+    writeFileSync(pauseNotePath, buildLifecycleNote("Pause", issueText, reason!, now), "utf8");
+    writeJson(statusPath, { ...workStatus, status: "paused", paused_at: now, pause_reason: reason });
+    printBlock("pause", {
+      status: "paused",
+      issue: issueText,
+      "pause-note": relativeToCwd(pauseNotePath),
+      "next-step": `slopflow resume ${issueId}`,
+    });
+    return 0;
+  }
+
+  if (action === "cancel") {
+    if (workStatus.status === "complete") {
+      throw new SlopflowError("Complete issue work cannot be cancelled.", `Inspect ${relativeToCwd(join(workDir, "completion-note.md"))}.`, 2);
+    }
+    const cancelNotePath = join(workDir, "cancel-note.md");
+    writeFileSync(cancelNotePath, buildLifecycleNote("Cancel", issueText, reason!, now), "utf8");
+    writeJson(statusPath, { ...workStatus, status: "cancelled", cancelled_at: now, cancel_reason: reason });
+    printBlock("cancel", {
+      status: "cancelled",
+      issue: issueText,
+      "cancel-note": relativeToCwd(cancelNotePath),
+      artifacts: "preserved",
+      "next-step": "inspect artifacts or manually abandon related VCS work if desired",
+    });
+    return 0;
+  }
+
+  if (workStatus.status === "cancelled") {
+    throw new SlopflowError("Cancelled issue work cannot be resumed.", `Inspect ${relativeToCwd(join(workDir, "cancel-note.md"))}.`, 2);
+  }
+  const wasPaused = workStatus.status === "paused";
+  if (wasPaused) {
+    writeJson(statusPath, { ...workStatus, status: "active", resumed_at: now });
+  }
+  const testsSummary = summarizeLatestTests(workDir);
+  const reviewStatus = summarizeReviewVerdict(workDir);
+  const completionStatus = existsSync(join(workDir, "completion-note.md")) || workStatus.status === "complete" ? "complete" : "incomplete";
+  printBlock("resume", {
+    status: wasPaused ? "active" : String(workStatus.status ?? "active"),
+    issue: issueText,
+    contract: relativeToCwd(join(workDir, "contract.md")),
+    tests: testsSummary,
+    review: reviewStatus,
+    completion: completionStatus,
+    "current-jj-change": readCurrentJjChange(root),
+    "next-step": nextStepForWork(issueId!, workDir, reviewStatus, completionStatus),
+  });
+  return 0;
+}
+
+function readLifecycleContext(issueId: string | undefined, command: "pause" | "resume" | "cancel"): { root: string; workDir: string; workStatus: WorkStatus; statusPath: string } {
+  if (!issueId) {
+    throw new SlopflowError("Missing issue id.", `Run \`slopflow ${command} <issue-id>${command === "resume" ? "" : " --reason <text>"}\`.`, 2);
+  }
+  if (!/^\d+$/.test(issueId)) {
+    throw new SlopflowError("Issue id must be a plain number for the configured repository.", undefined, 2);
+  }
+  const root = findRepoRoot(process.cwd());
+  if (!root) {
+    throw new SlopflowError("Could not find a repository root.", "Run Slopflow inside an initialized repository.", 2);
+  }
+  const config = readMachineConfig(root);
+  const workDir = join(root, config.artifact_root, issueId);
+  const statusPath = join(workDir, "status.json");
+  return { root, workDir, statusPath, workStatus: readWorkStatus(workDir, issueId, command) };
+}
+
+function parseReasonArg(args: string[], command: "pause" | "cancel"): string {
+  const reasonIndex = args.indexOf("--reason");
+  const reason = reasonIndex >= 0 ? args[reasonIndex + 1] : undefined;
+  if (!reason || reason.trim().length === 0) {
+    throw new SlopflowError("Missing required `--reason <text>`.", `Run \`slopflow ${command} <issue-id> --reason <text>\`.`, 2);
+  }
+  return reason.trim();
+}
+
+function buildLifecycleNote(kind: "Pause" | "Cancel", issue: string, reason: string, timestamp: string): string {
+  const verb = kind === "Pause" ? "Paused" : "Cancelled";
+  return `# ${kind} Note\n\n` +
+    `Issue: ${issue}\n\n` +
+    `${verb} at: ${timestamp}\n\n` +
+    `## Reason\n\n${reason}\n`;
+}
+
+function summarizeLatestTests(workDir: string): string {
+  const testsPath = join(workDir, "evidence", "tests.json");
+  if (!existsSync(testsPath)) return "missing";
+  const evidence = readTestEvidence(testsPath);
+  const latest = Object.entries(evidence.latest);
+  if (latest.length === 0) return "missing";
+  return latest.map(([name, gate]) => `${name}:${gate.status}`).join(",");
+}
+
+function summarizeReviewVerdict(workDir: string): string {
+  const reviewPath = join(workDir, "review.json");
+  if (!existsSync(reviewPath)) return "missing";
+  const validation = readAndValidateReviewVerdict(reviewPath);
+  return validation.ok ? validation.verdict.verdict : "invalid";
+}
+
+function nextStepForWork(issueId: string, workDir: string, reviewStatus: string, completionStatus: string): string {
+  if (completionStatus === "complete") return "no local action required";
+  if (summarizeLatestTests(workDir) === "missing") return `slopflow test ${issueId} --name <gate> -- <command>`;
+  if (reviewStatus === "missing" || reviewStatus === "invalid") return `slopflow review ${issueId}`;
+  if (reviewStatus === "changes-requested") return "address required changes";
+  return `slopflow complete ${issueId}`;
+}
+
+function readWorkStatus(workDir: string, issueId: string, command: "test" | "review" | "complete" | "pause" | "resume" | "cancel"): WorkStatus {
   const workStatusPath = join(workDir, "status.json");
   if (!existsSync(workStatusPath)) {
     throw new SlopflowError(
       `Issue work status not found for #${issueId}.`,
-      `Run \`slopflow start ${issueId}\` before ${command === "test" ? "capturing test evidence" : command === "review" ? "preparing review" : "completing work"}.`,
+      `Run \`slopflow start ${issueId}\` before ${workStatusCommandPhrase(command)}.`,
       2,
     );
   }
-  const workStatus = readJson(workStatusPath) as { issue?: IssueReference };
+  const workStatus = readJson(workStatusPath) as Partial<WorkStatus>;
   if (!workStatus.issue) {
     throw new SlopflowError(
       `Issue work status is missing issue metadata for #${issueId}.`,
@@ -412,7 +559,16 @@ function readWorkStatus(workDir: string, issueId: string, command: "test" | "rev
       2,
     );
   }
-  return { issue: workStatus.issue };
+  return workStatus as WorkStatus;
+}
+
+function workStatusCommandPhrase(command: "test" | "review" | "complete" | "pause" | "resume" | "cancel"): string {
+  if (command === "test") return "capturing test evidence";
+  if (command === "review") return "preparing review";
+  if (command === "complete") return "completing work";
+  if (command === "pause") return "pausing work";
+  if (command === "resume") return "resuming work";
+  return "cancelling work";
 }
 
 function parseTestArgs(args: string[]): { issueId: string; gateName: string; command: string[] } {
@@ -569,7 +725,7 @@ async function statusCommand(): Promise<number> {
   const config = readMachineConfig(root);
   const artifactRoot = String(config.artifact_root ?? DEFAULT_ARTIFACT_ROOT);
   const workRoot = join(root, artifactRoot);
-  const activeWorkCount = await countWorkDirs(workRoot);
+  const workCounts = await countWorkDirsByStatus(workRoot);
   const currentJjChange = readCurrentJjChange(root);
 
   printBlock("status", {
@@ -579,7 +735,10 @@ async function statusCommand(): Promise<number> {
     vcs: config.vcs.type,
     "artifact-root": artifactRoot,
     "current-jj-change": currentJjChange,
-    "active-work-count": activeWorkCount,
+    "active-work-count": workCounts.active,
+    "paused-work-count": workCounts.paused,
+    "cancelled-work-count": workCounts.cancelled,
+    "complete-work-count": workCounts.complete,
     "next-step": "slopflow start <issue-id>",
   });
   return 0;
@@ -654,7 +813,7 @@ function buildStartArtifacts({
   const contract = buildContract(issue, issueReference);
   const status = {
     schema_version: 1,
-    status: "started",
+    status: "active",
     issue: issueReference,
     work_directory: relative(root, workDir),
     artifacts: {
@@ -1025,12 +1184,26 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(value);
 }
 
-async function countWorkDirs(workRoot: string): Promise<number> {
+async function countWorkDirsByStatus(workRoot: string): Promise<{ active: number; paused: number; cancelled: number; complete: number }> {
+  const counts = { active: 0, paused: 0, cancelled: 0, complete: 0 };
   try {
     const entries = await readdir(workRoot, { withFileTypes: true });
-    return entries.filter((entry) => entry.isDirectory()).length;
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const statusPath = join(workRoot, entry.name, "status.json");
+      let status = "active";
+      if (existsSync(statusPath)) {
+        const value = readJson(statusPath) as { status?: string };
+        status = value.status ?? "active";
+      }
+      if (status === "paused") counts.paused += 1;
+      else if (status === "cancelled") counts.cancelled += 1;
+      else if (status === "complete") counts.complete += 1;
+      else counts.active += 1;
+    }
+    return counts;
   } catch {
-    return 0;
+    return counts;
   }
 }
 
@@ -1078,7 +1251,7 @@ function printBlock(name: string, values: Record<string, unknown>, stream: NodeJ
 
 function printHelp(): void {
   process.stdout.write(
-    `Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  start <issue-id>\n  test <issue-id> --name <gate> -- <command...>\n  review <issue-id>\n  complete <issue-id>\n`,
+    `Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  start <issue-id>\n  pause <issue-id> --reason <text>\n  resume <issue-id>\n  cancel <issue-id> --reason <text>\n  test <issue-id> --name <gate> -- <command...>\n  review <issue-id>\n  complete <issue-id>\n`,
   );
 }
 

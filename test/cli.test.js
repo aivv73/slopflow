@@ -351,6 +351,95 @@ test("test validates gate name and command separator", requiresJj, withRepo((rep
   assert.match(missingSeparator.stderr, /Missing `--`/);
 }));
 
+test("pause writes note and resume reactivates paused work", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+
+  const paused = slopflow(repo, env, "pause", "2", "--reason", "waiting for review availability");
+  assert.equal(paused.status, 0, paused.stderr);
+  assert.match(paused.stdout, /pause:/);
+  assert.match(paused.stdout, /status: paused/);
+  assert.match(paused.stdout, /pause-note: \.slopflow\/work\/2\/pause-note.md/);
+  assert.match(paused.stdout, /next-step: slopflow resume 2/);
+
+  const workDir = join(repo, ".slopflow", "work", "2");
+  const pauseNote = readFileSync(join(workDir, "pause-note.md"), "utf8");
+  assert.match(pauseNote, /# Pause Note/);
+  assert.match(pauseNote, /waiting for review availability/);
+  assert.equal(existsSync(join(workDir, "contract.md")), true);
+  assert.equal(JSON.parse(readFileSync(join(workDir, "status.json"), "utf8")).status, "paused");
+
+  const resumed = slopflow(repo, env, "resume", "2");
+  assert.equal(resumed.status, 0, resumed.stderr);
+  assert.match(resumed.stdout, /resume:/);
+  assert.match(resumed.stdout, /status: active/);
+  assert.match(resumed.stdout, /contract: \.slopflow\/work\/2\/contract.md/);
+  assert.match(resumed.stdout, /tests: missing/);
+  assert.match(resumed.stdout, /review: missing/);
+  assert.match(resumed.stdout, /next-step: slopflow test 2 --name <gate> -- <command>/);
+  assert.equal(JSON.parse(readFileSync(join(workDir, "status.json"), "utf8")).status, "active");
+}));
+
+test("cancel writes note, preserves artifacts, and blocks resume", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+
+  const cancelled = slopflow(repo, env, "cancel", "2", "--reason", "superseded by another issue");
+  assert.equal(cancelled.status, 0, cancelled.stderr);
+  assert.match(cancelled.stdout, /cancel:/);
+  assert.match(cancelled.stdout, /status: cancelled/);
+  assert.match(cancelled.stdout, /cancel-note: \.slopflow\/work\/2\/cancel-note.md/);
+  assert.match(cancelled.stdout, /artifacts: preserved/);
+
+  const workDir = join(repo, ".slopflow", "work", "2");
+  assert.equal(existsSync(join(workDir, "contract.md")), true);
+  assert.match(readFileSync(join(workDir, "cancel-note.md"), "utf8"), /superseded by another issue/);
+  assert.equal(JSON.parse(readFileSync(join(workDir, "status.json"), "utf8")).status, "cancelled");
+
+  const resumed = slopflow(repo, env, "resume", "2");
+  assert.equal(resumed.status, 2);
+  assert.match(resumed.stderr, /Cancelled issue work cannot be resumed/);
+}));
+
+test("lifecycle commands validate reasons and terminal transitions", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+
+  const missingReason = slopflow(repo, env, "pause", "2");
+  assert.equal(missingReason.status, 2);
+  assert.match(missingReason.stderr, /Missing required `--reason <text>`/);
+
+  assert.equal(slopflow(repo, env, "cancel", "2", "--reason", "not needed").status, 0);
+  const pauseCancelled = slopflow(repo, env, "pause", "2", "--reason", "later");
+  assert.equal(pauseCancelled.status, 2);
+  assert.match(pauseCancelled.stderr, /Cancelled issue work cannot be paused/);
+
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  const invalidId = slopflow(repo, env, "resume", "abc");
+  assert.equal(invalidId.status, 2);
+  assert.match(invalidId.stderr, /Issue id must be a plain number/);
+}));
+
+test("status reports active paused cancelled and complete work counts", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  for (const [id, status] of [["1", "active"], ["2", "paused"], ["3", "cancelled"], ["4", "complete"]]) {
+    const workDir = join(repo, ".slopflow", "work", id);
+    mkdirSync(workDir, { recursive: true });
+    writeFileSync(join(workDir, "status.json"), JSON.stringify({
+      schema_version: 1,
+      status,
+      issue: { provider: "github", repo: "aivv73/slopflow", number: Number(id), kind: "issue" },
+    }), "utf8");
+  }
+
+  const result = slopflow(repo, env, "status");
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /active-work-count: 1/);
+  assert.match(result.stdout, /paused-work-count: 1/);
+  assert.match(result.stdout, /cancelled-work-count: 1/);
+  assert.match(result.stdout, /complete-work-count: 1/);
+}));
+
 test("review creates packet and reports pending when review verdict is missing", requiresJj, withRepo((repo, env) => {
   assert.equal(slopflow(repo, env, "init").status, 0);
   assert.equal(slopflow(repo, env, "start", "2").status, 0);
@@ -545,6 +634,20 @@ test("complete blocks missing and failed test evidence", requiresJj, withRepo((r
   const failed = slopflow(repo, env, "complete", "2");
   assert.equal(failed.status, 2);
   assert.match(failed.stdout, /failed latest test gate: unit/);
+}));
+
+test("complete blocks cancelled work", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  assert.equal(slopflow(repo, env, "test", "2", "--name", "unit", "--", process.execPath, "-e", "console.log('ok')").status, 0);
+  writeReview(repo, "2");
+  assert.equal(slopflow(repo, env, "cancel", "2", "--reason", "superseded").status, 0);
+
+  const result = slopflow(repo, env, "complete", "2");
+
+  assert.equal(result.status, 2);
+  assert.match(result.stdout, /status: blocked/);
+  assert.match(result.stdout, /reason: issue work is cancelled/);
 }));
 
 test("complete requires at least one passed latest test gate", requiresJj, withRepo((repo, env) => {

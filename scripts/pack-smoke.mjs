@@ -25,7 +25,7 @@ try {
   run("npm", ["install", "--silent", tarballPath], { cwd: tempDir });
 
   const help = run(installedBin(tempDir), ["--help"], { cwd: tempDir });
-  for (const command of ["init", "status", "start", "test", "review", "complete"]) {
+  for (const command of ["init", "status", "start", "pause", "resume", "cancel", "test", "review", "complete"]) {
     if (!help.stdout.includes(command)) {
       throw new Error(`Installed slopflow --help output did not include command: ${command}\n${help.stdout}`);
     }
