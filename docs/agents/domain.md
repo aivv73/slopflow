@@ -1,3 +1,10 @@
+---
+type: Agent Configuration
+title: Domain docs
+description: Agent-consumable rules for finding and using this repository's domain documentation.
+tags: [agents, domain-docs, architecture]
+---
+
 # Domain Docs
 
 How the engineering skills should consume this repo's domain documentation when exploring the codebase.
