@@ -92,16 +92,16 @@ slopflow complete 2
 For a new project, install and run the setup skill before the Slopflow execution skill. It records the repository's issue tracker, triage labels, and domain-documentation layout so later engineering skills have the local context they expect:
 
 ```bash
-npx skills add aivv73/slopflow --skill setup-matt-pocock-skills
+npx skills add aivv73/slopflow --skill setup-slopflow-skills
 ```
 
 If your agent runtime supports Claude-compatible skill interpolation, use the live setup variant instead:
 
 ```bash
-npx skills add aivv73/slopflow --skill setup-matt-pocock-skills-live
+npx skills add aivv73/slopflow --skill setup-slopflow-skills-live
 ```
 
-The setup skills create OKF-compatible `docs/agents/*.md` concept documents and update the repo's `AGENTS.md` or `CLAUDE.md` instructions. Run one of them first in a newly onboarded project, then initialize Slopflow and use the execution skill.
+The setup skills create OKF-compatible `docs/agents/*.md` concept documents and update the repo's `AGENTS.md` or `CLAUDE.md` instructions. They are adapted from Matt Pocock's engineering skills (https://github.com/mattpocock/skills/) for Slopflow onboarding. Run one of them first in a newly onboarded project, then initialize Slopflow and use the execution skill.
 
 Install the portable Slopflow skill:
 

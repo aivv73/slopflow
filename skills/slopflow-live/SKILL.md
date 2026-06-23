@@ -10,7 +10,7 @@ Use this skill when working in a repository that uses Slopflow and the agent run
 
 This skill is compatible with Claude Code skill shell execution and with Pi when `pi-skill-interpolation` is installed. The live context below is a snapshot rendered before the model sees the skill. Rerun Slopflow commands before making gate decisions.
 
-For a newly onboarded project, run the `setup-matt-pocock-skills-live` skill first. It records the repository's issue tracker, triage label vocabulary, and domain documentation layout in `docs/agents/*.md` before this execution workflow starts issue work.
+For a newly onboarded project, run the `setup-slopflow-skills-live` skill first. It records the repository's issue tracker, triage label vocabulary, and domain documentation layout in `docs/agents/*.md` before this execution workflow starts issue work.
 
 If shell execution is disabled by policy, treat the live context as unavailable and run the read-only inspection commands manually.
 
@@ -47,7 +47,7 @@ The Slopflow CLI output and `.slopflow/work/<issue-id>/` artifacts are canonical
    slopflow status
    ```
 
-2. If this is a new project and `docs/agents/issue-tracker.md`, `docs/agents/triage-labels.md`, or `docs/agents/domain.md` are missing, pause and ask to run `setup-matt-pocock-skills-live` before Slopflow issue execution.
+2. If this is a new project and `docs/agents/issue-tracker.md`, `docs/agents/triage-labels.md`, or `docs/agents/domain.md` are missing, pause and ask to run `setup-slopflow-skills-live` before Slopflow issue execution.
 
 3. If Slopflow is not initialized, ask before running:
 

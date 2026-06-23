@@ -14,8 +14,8 @@ The npm package distributes the Slopflow CLI only. It is expected to contain:
 Agent skills are distributed separately from the repository through Vercel Skills:
 
 ```bash
-npx skills add aivv73/slopflow --skill setup-matt-pocock-skills
-npx skills add aivv73/slopflow --skill setup-matt-pocock-skills-live
+npx skills add aivv73/slopflow --skill setup-slopflow-skills
+npx skills add aivv73/slopflow --skill setup-slopflow-skills-live
 npx skills add aivv73/slopflow --skill slopflow
 npx skills add aivv73/slopflow --skill slopflow-live
 ```

@@ -7,7 +7,7 @@ description: Follow Slopflow's controlled issue execution workflow for AI coding
 
 Use this skill when working in a repository that uses Slopflow, or when the user asks you to implement an existing issue through Slopflow.
 
-For a newly onboarded project, run the `setup-matt-pocock-skills` skill first. It records the repository's issue tracker, triage label vocabulary, and domain documentation layout in `docs/agents/*.md` before this execution workflow starts issue work.
+For a newly onboarded project, run the `setup-slopflow-skills` skill first. It records the repository's issue tracker, triage label vocabulary, and domain documentation layout in `docs/agents/*.md` before this execution workflow starts issue work.
 
 ## What it does
 
@@ -30,7 +30,7 @@ The Slopflow CLI output and `.slopflow/work/<issue-id>/` artifacts are canonical
    slopflow status
    ```
 
-2. If this is a new project and `docs/agents/issue-tracker.md`, `docs/agents/triage-labels.md`, or `docs/agents/domain.md` are missing, pause and ask to run `setup-matt-pocock-skills` before Slopflow issue execution.
+2. If this is a new project and `docs/agents/issue-tracker.md`, `docs/agents/triage-labels.md`, or `docs/agents/domain.md` are missing, pause and ask to run `setup-slopflow-skills` before Slopflow issue execution.
 
 3. If Slopflow is not initialized, ask before running:
 
