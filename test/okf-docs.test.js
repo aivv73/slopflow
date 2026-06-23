@@ -36,6 +36,8 @@ test("OKF index documents have frontmatter and relative links", () => {
         "0005-complete-is-a-local-artifact-gate.md",
         "0006-skills-are-distributed-by-skills-installers.md",
         "0007-lifecycle-commands-are-artifact-state-transitions.md",
+        "0008-cli-output-follows-axi-principles.md",
+        "0009-agent-docs-use-okf-runtime-artifacts-remain-slopflow-artifacts.md",
       ],
     },
   ];
