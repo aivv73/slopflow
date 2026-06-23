@@ -16,6 +16,7 @@ function makeRepo() {
   mkdirSync(repo);
   run(["git", "init", "-q"], repo, true);
   run(["git", "remote", "add", "origin", "https://github.com/aivv73/slopflow.git"], repo, true);
+  writeFileSync(join(repo, "package.json"), JSON.stringify({ engines: { node: ">=24" } }), "utf8");
   run(["jj", "git", "init", "--colocate"], repo, true);
   const bin = join(dir, "bin");
   mkdirSync(bin);
@@ -24,6 +25,10 @@ function makeRepo() {
     ghPath,
     `#!/usr/bin/env node
 const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  console.log("gh version 0.0.0-test");
+  process.exit(0);
+}
 const kind = args[0];
 const number = Number(args[2]);
 if (kind === "issue" && args[1] === "view" && number === 2) {
@@ -85,6 +90,15 @@ function writeReview(repo, issueId, overrides = {}) {
     required_changes: [],
     ...overrides,
   }), "utf8");
+}
+
+function writeProjectDocs(repo) {
+  mkdirSync(join(repo, "docs", "agents"), { recursive: true });
+  mkdirSync(join(repo, "docs", "adr"), { recursive: true });
+  writeFileSync(join(repo, "docs", "agents", "issue-tracker.md"), "---\ntype: Agent Configuration\n---\n# Issue tracker\n", "utf8");
+  writeFileSync(join(repo, "docs", "agents", "triage-labels.md"), "---\ntype: Agent Configuration\n---\n# Triage labels\n", "utf8");
+  writeFileSync(join(repo, "docs", "agents", "domain.md"), "---\ntype: Agent Configuration\n---\n# Domain\n", "utf8");
+  writeFileSync(join(repo, "CONTEXT.md"), "# Context\n", "utf8");
 }
 
 test("init creates machine config and work root", requiresJj, withRepo((repo, env) => {
@@ -175,6 +189,59 @@ test("status blocks before init", requiresJj, withRepo((repo, env) => {
   assert.equal(result.status, 2);
   assert.match(result.stdout, /status: blocked/);
   assert.match(result.stdout, /Run `slopflow init` first/);
+}));
+
+test("doctor reports initialized repository readiness", requiresJj, withRepo((repo, env) => {
+  writeProjectDocs(repo);
+  assert.equal(slopflow(repo, env, "init").status, 0);
+
+  const result = slopflow(repo, env, "doctor");
+
+  assert.equal(result.status, 0, result.stdout);
+  assert.match(result.stdout, /doctor:/);
+  assert.match(result.stdout, /status: warn/);
+  assert.match(result.stdout, /core: passed/);
+  assert.match(result.stdout, /project-docs: passed/);
+  assert.match(result.stdout, /recommended: warn/);
+  assert.match(result.stdout, /failed-count: 0/);
+  assert.match(result.stdout, /warning-count: 1/);
+  assert.match(result.stdout, /next-step: run npx -y gh-axi --help when GitHub AXI operations are needed/);
+  assert.match(result.stdout, /checks\[/);
+  assert.match(result.stdout, /core.node: passed node v.* satisfies >=24/);
+  assert.match(result.stdout, /core.config: passed/);
+  assert.match(result.stdout, /recommended.gh: passed/);
+  assert.match(result.stdout, /recommended.gh-axi: warn unchecked/);
+}));
+
+test("doctor fails before initialization and suggests init", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env, "doctor");
+
+  assert.equal(result.status, 2);
+  assert.match(result.stdout, /doctor:/);
+  assert.match(result.stdout, /status: failed/);
+  assert.match(result.stdout, /core: failed/);
+  assert.match(result.stdout, /core.config: failed \.slopflow\/config\.json missing/);
+  assert.match(result.stdout, /core.work-root: failed \.slopflow\/work missing/);
+  assert.match(result.stdout, /next-step: slopflow init/);
+}));
+
+test("doctor warns when optional gh tool is missing", requiresJj, withRepo((repo, env) => {
+  writeProjectDocs(repo);
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  const bin = mkdtempSync(join(tmpdir(), "slopflow-doctor-bin-"));
+  const jjPath = join(bin, "jj");
+  writeFileSync(jjPath, "#!/bin/sh\necho 'jj 0.0.0-test'\n", "utf8");
+  chmodSync(jjPath, 0o755);
+
+  const result = slopflow(repo, { ...env, PATH: bin }, "doctor");
+
+  assert.equal(result.status, 0, result.stdout);
+  assert.match(result.stdout, /status: warn/);
+  assert.match(result.stdout, /core: passed/);
+  assert.match(result.stdout, /recommended: warn/);
+  assert.match(result.stdout, /recommended.gh: warn gh executable missing/);
+  assert.match(result.stdout, /recommended.gh-axi: warn unchecked/);
+  assert.match(result.stdout, /next-step: install gh or continue if GitHub start is not needed/);
 }));
 
 test("no-args home view reports uninitialized repository", requiresJj, withRepo((repo, env) => {

@@ -108,6 +108,9 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     if (command === "status") {
       return await statusCommand();
     }
+    if (command === "doctor") {
+      return doctorCommand();
+    }
     if (command === "start") {
       return startCommand(args[0]);
     }
@@ -145,6 +148,150 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     }
     throw error;
   }
+}
+
+type DoctorCheck = {
+  name: string;
+  status: "passed" | "warn" | "failed";
+  detail: string;
+};
+
+function doctorCommand(): number {
+  const checks: DoctorCheck[] = [];
+  checks.push({ name: "core.slopflow", status: "passed", detail: "cli running" });
+
+  const root = findRepoRoot(process.cwd());
+  const nodeEngine = root ? readPackageNodeEngine(root) : null;
+  const nodeSatisfies = nodeEngine ? nodeVersionSatisfies(process.versions.node, nodeEngine) : true;
+  checks.push({
+    name: "core.node",
+    status: nodeSatisfies ? "passed" : "failed",
+    detail: nodeEngine ? `node v${process.versions.node} satisfies ${nodeEngine}` : `node v${process.versions.node}; package.json engines.node not found`,
+  });
+
+  const jjPresent = commandExists("jj");
+  checks.push({
+    name: "core.jj",
+    status: jjPresent ? "passed" : "failed",
+    detail: jjPresent ? "jj executable found" : "jj executable missing",
+  });
+
+  checks.push({
+    name: "core.repository",
+    status: root ? "passed" : "failed",
+    detail: root ? `root ${relativeToCwd(root)}` : "no .jj or .git repository root found",
+  });
+
+  const jjRepo = root ? existsSync(join(root, ".jj")) : false;
+  checks.push({
+    name: "core.jj-repo",
+    status: jjRepo ? "passed" : "failed",
+    detail: jjRepo ? ".jj present" : "Jujutsu repository not detected",
+  });
+
+  const configPath = root ? join(root, ".slopflow", "config.json") : "";
+  const configExists = Boolean(root && existsSync(configPath));
+  checks.push({
+    name: "core.config",
+    status: configExists ? "passed" : "failed",
+    detail: configExists ? relativeToCwd(configPath) : ".slopflow/config.json missing",
+  });
+
+  let artifactRoot = DEFAULT_ARTIFACT_ROOT;
+  if (root && configExists) {
+    try {
+      artifactRoot = readMachineConfig(root).artifact_root;
+    } catch {
+      artifactRoot = DEFAULT_ARTIFACT_ROOT;
+    }
+  }
+  const workRoot = root ? join(root, artifactRoot) : "";
+  const workRootExists = Boolean(root && existsSync(workRoot));
+  checks.push({
+    name: "core.work-root",
+    status: workRootExists ? "passed" : "failed",
+    detail: workRootExists ? relativeToCwd(workRoot) : `${artifactRoot} missing`,
+  });
+
+  for (const [name, path] of [
+    ["project-docs.issue-tracker", "docs/agents/issue-tracker.md"],
+    ["project-docs.triage-labels", "docs/agents/triage-labels.md"],
+    ["project-docs.domain", "docs/agents/domain.md"],
+    ["project-docs.context", "CONTEXT.md"],
+    ["project-docs.adr", "docs/adr"],
+  ] as const) {
+    const present = Boolean(root && existsSync(join(root, path)));
+    checks.push({ name, status: present ? "passed" : "warn", detail: present ? path : `${path} missing` });
+  }
+
+  const ghPresent = commandExists("gh");
+  checks.push({
+    name: "recommended.gh",
+    status: ghPresent ? "passed" : "warn",
+    detail: ghPresent ? "gh executable found" : "gh executable missing; GitHub issue start may fail",
+  });
+  checks.push({
+    name: "recommended.gh-axi",
+    status: "warn",
+    detail: "unchecked; run npx -y gh-axi --help when GitHub AXI operations are needed",
+  });
+
+  const failedCount = checks.filter((check) => check.status === "failed").length;
+  const warningCount = checks.filter((check) => check.status === "warn").length;
+  const status = failedCount > 0 ? "failed" : warningCount > 0 ? "warn" : "passed";
+  const coreStatus = checks.some((check) => check.name.startsWith("core.") && check.status === "failed") ? "failed" : "passed";
+  const projectDocsStatus = groupStatus(checks, "project-docs.");
+  const recommendedStatus = groupStatus(checks, "recommended.");
+
+  printBlock("doctor", {
+    status,
+    core: coreStatus,
+    "project-docs": projectDocsStatus,
+    recommended: recommendedStatus,
+    "failed-count": failedCount,
+    "warning-count": warningCount,
+    "next-step": nextStepForDoctor(status, checks),
+  });
+  printBlock(`checks[${checks.length}]`, Object.fromEntries(checks.map((check) => [check.name, `${check.status} ${check.detail}`])));
+  return failedCount > 0 ? 2 : 0;
+}
+
+function groupStatus(checks: DoctorCheck[], prefix: string): "passed" | "warn" | "failed" {
+  const group = checks.filter((check) => check.name.startsWith(prefix));
+  if (group.some((check) => check.status === "failed")) return "failed";
+  if (group.some((check) => check.status === "warn")) return "warn";
+  return "passed";
+}
+
+function nextStepForDoctor(status: string, checks: DoctorCheck[]): string {
+  if (status === "passed") return "slopflow start <issue-id>";
+  const firstFailed = checks.find((check) => check.status === "failed");
+  if (firstFailed?.name === "core.config") return "slopflow init";
+  if (firstFailed?.name === "core.work-root") return "slopflow init";
+  if (firstFailed?.name === "core.jj") return "install jj";
+  if (firstFailed?.name === "core.repository" || firstFailed?.name === "core.jj-repo") return "run inside a Jujutsu repository";
+  const firstWarn = checks.find((check) => check.status === "warn");
+  if (firstWarn?.name === "recommended.gh") return "install gh or continue if GitHub start is not needed";
+  if (firstWarn?.name === "recommended.gh-axi") return "run npx -y gh-axi --help when GitHub AXI operations are needed";
+  return "inspect doctor checks";
+}
+
+function readPackageNodeEngine(root: string): string | null {
+  const packagePath = join(root, "package.json");
+  if (!existsSync(packagePath)) return null;
+  try {
+    const packageJson = readJson(packagePath) as { engines?: { node?: unknown } };
+    return typeof packageJson.engines?.node === "string" ? packageJson.engines.node : null;
+  } catch {
+    return null;
+  }
+}
+
+function nodeVersionSatisfies(version: string, engine: string): boolean {
+  const major = Number(version.split(".")[0] ?? "0");
+  const minimumMajor = engine.match(/>=\s*(\d+)/)?.[1];
+  if (minimumMajor) return major >= Number(minimumMajor);
+  return true;
 }
 
 async function homeCommand(): Promise<number> {
@@ -1405,7 +1552,7 @@ function printBlock(name: string, values: Record<string, unknown>, stream: NodeJ
 
 function printHelp(): void {
   process.stdout.write(
-    `Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  start <issue-id>\n  pause <issue-id> --reason <text>\n  resume <issue-id>\n  cancel <issue-id> --reason <text>\n  test <issue-id> --name <gate> -- <command...>\n  review <issue-id>\n  complete <issue-id>\n`,
+    `Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  doctor\n  start <issue-id>\n  pause <issue-id> --reason <text>\n  resume <issue-id>\n  cancel <issue-id> --reason <text>\n  test <issue-id> --name <gate> -- <command...>\n  review <issue-id>\n  complete <issue-id>\n`,
   );
 }
 
