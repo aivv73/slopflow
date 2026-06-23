@@ -94,6 +94,13 @@ class SlopflowError extends Error {
 export async function main(argv = process.argv.slice(2)): Promise<number> {
   try {
     const [command, ...args] = argv;
+    if (!command) {
+      return await homeCommand();
+    }
+    if (command === "--help" || command === "-h") {
+      printHelp();
+      return 0;
+    }
     if (command === "init") {
       return initCommand({ force: args.includes("--force") });
     }
@@ -121,8 +128,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     if (command === "complete") {
       return completeCommand(args[0]);
     }
-    printHelp();
-    return 0;
+    throw new SlopflowError(`Unknown command: ${command}`, "Run `slopflow --help`.", 2);
   } catch (error) {
     if (error instanceof SlopflowError) {
       printBlock(
@@ -138,6 +144,57 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     }
     throw error;
   }
+}
+
+async function homeCommand(): Promise<number> {
+  const bin = process.argv[1] ? relativeToCwd(realpathSync(process.argv[1])) : "slopflow";
+  const description = "Controlled issue execution for AI coding agents.";
+  const root = findRepoRoot(process.cwd());
+
+  if (!root) {
+    printBlock("slopflow", {
+      bin,
+      description,
+      state: "no-repository",
+      "next-step": "cd to a Slopflow repository or run `slopflow --help`",
+    });
+    return 0;
+  }
+
+  const configPath = join(root, ".slopflow", "config.json");
+  if (!existsSync(configPath)) {
+    printBlock("slopflow", {
+      bin,
+      description,
+      state: "uninitialized",
+      "repo-root": relativeToCwd(root),
+      vcs: existsSync(join(root, ".jj")) ? "jj" : "unknown",
+      "next-step": "slopflow init",
+    });
+    return 0;
+  }
+
+  const config = readMachineConfig(root);
+  const artifactRoot = String(config.artifact_root ?? DEFAULT_ARTIFACT_ROOT);
+  const workRoot = join(root, artifactRoot);
+  const workCounts = await countWorkDirsByStatus(workRoot);
+
+  printBlock("slopflow", {
+    bin,
+    description,
+    state: "initialized",
+    repo: config.issue_tracker.repo,
+    issue_tracker: config.issue_tracker.type,
+    vcs: config.vcs.type,
+    "artifact-root": artifactRoot,
+    "current-jj-change": readCurrentJjChange(root),
+    "active-work-count": workCounts.active,
+    "paused-work-count": workCounts.paused,
+    "cancelled-work-count": workCounts.cancelled,
+    "complete-work-count": workCounts.complete,
+    "next-step": "slopflow start <issue-id>",
+  });
+  return 0;
 }
 
 function completeCommand(issueId: string | undefined): number {
