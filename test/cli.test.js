@@ -118,9 +118,9 @@ test("init refuses incompatible config without force", requiresJj, withRepo((rep
 
   const blocked = slopflow(repo, env, "init");
   assert.equal(blocked.status, 2);
-  assert.match(blocked.stderr, /status: blocked/);
-  assert.match(blocked.stderr, /differs from detected config/);
-  assert.match(blocked.stderr, /slopflow init --force/);
+  assert.match(blocked.stdout, /status: blocked/);
+  assert.match(blocked.stdout, /differs from detected config/);
+  assert.match(blocked.stdout, /slopflow init --force/);
 }));
 
 test("init force refreshes incompatible config", requiresJj, withRepo((repo, env) => {
@@ -165,8 +165,8 @@ test("status reports config, jj change, active work count, and next step", requi
 test("status blocks before init", requiresJj, withRepo((repo, env) => {
   const result = slopflow(repo, env, "status");
   assert.equal(result.status, 2);
-  assert.match(result.stderr, /status: blocked/);
-  assert.match(result.stderr, /Run `slopflow init` first/);
+  assert.match(result.stdout, /status: blocked/);
+  assert.match(result.stdout, /Run `slopflow init` first/);
 }));
 
 test("no-args home view reports uninitialized repository", requiresJj, withRepo((repo, env) => {
@@ -216,10 +216,11 @@ test("unknown commands return structured error and nonzero exit", requiresJj, wi
   const result = slopflow(repo, env, "bogus");
 
   assert.equal(result.status, 2);
-  assert.match(result.stderr, /error:/);
-  assert.match(result.stderr, /status: blocked/);
-  assert.match(result.stderr, /Unknown command: bogus/);
-  assert.match(result.stderr, /slopflow --help/);
+  assert.match(result.stdout, /error:/);
+  assert.match(result.stdout, /status: blocked/);
+  assert.match(result.stdout, /Unknown command: bogus/);
+  assert.match(result.stdout, /slopflow --help/);
+  assert.equal(result.stderr, "");
 }));
 
 test("start creates bootstrap artifacts for a GitHub issue", requiresJj, withRepo((repo, env) => {
@@ -284,8 +285,8 @@ test("start refuses existing work directory without status metadata", requiresJj
   const result = slopflow(repo, env, "start", "2");
 
   assert.equal(result.status, 2);
-  assert.match(result.stderr, /status: blocked/);
-  assert.match(result.stderr, /already exists without status metadata/);
+  assert.match(result.stdout, /status: blocked/);
+  assert.match(result.stdout, /already exists without status metadata/);
 }));
 
 test("start refuses existing work directory for a different issue reference", requiresJj, withRepo((repo, env) => {
@@ -304,8 +305,8 @@ test("start refuses existing work directory for a different issue reference", re
   const result = slopflow(repo, env, "start", "2");
 
   assert.equal(result.status, 2);
-  assert.match(result.stderr, /status: blocked/);
-  assert.match(result.stderr, /different issue reference/);
+  assert.match(result.stdout, /status: blocked/);
+  assert.match(result.stdout, /different issue reference/);
 }));
 
 test("test records passed command evidence", requiresJj, withRepo((repo, env) => {
@@ -387,8 +388,8 @@ test("test refuses missing work directory", requiresJj, withRepo((repo, env) => 
   const result = slopflow(repo, env, "test", "2", "--name", "unit", "--", process.execPath, "-e", "console.log('never')");
 
   assert.equal(result.status, 2);
-  assert.match(result.stderr, /status: blocked/);
-  assert.match(result.stderr, /slopflow start 2/);
+  assert.match(result.stdout, /status: blocked/);
+  assert.match(result.stdout, /slopflow start 2/);
 }));
 
 test("test validates gate name and command separator", requiresJj, withRepo((repo, env) => {
@@ -397,11 +398,11 @@ test("test validates gate name and command separator", requiresJj, withRepo((rep
 
   const invalidName = slopflow(repo, env, "test", "2", "--name", "Unit", "--", process.execPath, "-e", "console.log('never')");
   assert.equal(invalidName.status, 2);
-  assert.match(invalidName.stderr, /Invalid gate name/);
+  assert.match(invalidName.stdout, /Invalid gate name/);
 
   const missingSeparator = slopflow(repo, env, "test", "2", "--name", "unit", process.execPath, "-e", "console.log('never')");
   assert.equal(missingSeparator.status, 2);
-  assert.match(missingSeparator.stderr, /Missing `--`/);
+  assert.match(missingSeparator.stdout, /Missing `--`/);
 }));
 
 test("pause writes note and resume reactivates paused work", requiresJj, withRepo((repo, env) => {
@@ -451,7 +452,7 @@ test("cancel writes note, preserves artifacts, and blocks resume", requiresJj, w
 
   const resumed = slopflow(repo, env, "resume", "2");
   assert.equal(resumed.status, 2);
-  assert.match(resumed.stderr, /Cancelled issue work cannot be resumed/);
+  assert.match(resumed.stdout, /Cancelled issue work cannot be resumed/);
 }));
 
 test("lifecycle commands validate reasons and terminal transitions", requiresJj, withRepo((repo, env) => {
@@ -460,17 +461,17 @@ test("lifecycle commands validate reasons and terminal transitions", requiresJj,
 
   const missingReason = slopflow(repo, env, "pause", "2");
   assert.equal(missingReason.status, 2);
-  assert.match(missingReason.stderr, /Missing required `--reason <text>`/);
+  assert.match(missingReason.stdout, /Missing required `--reason <text>`/);
 
   assert.equal(slopflow(repo, env, "cancel", "2", "--reason", "not needed").status, 0);
   const pauseCancelled = slopflow(repo, env, "pause", "2", "--reason", "later");
   assert.equal(pauseCancelled.status, 2);
-  assert.match(pauseCancelled.stderr, /Cancelled issue work cannot be paused/);
+  assert.match(pauseCancelled.stdout, /Cancelled issue work cannot be paused/);
 
   assert.equal(slopflow(repo, env, "start", "2").status, 0);
   const invalidId = slopflow(repo, env, "resume", "abc");
   assert.equal(invalidId.status, 2);
-  assert.match(invalidId.stderr, /Issue id must be a plain number/);
+  assert.match(invalidId.stdout, /Issue id must be a plain number/);
 }));
 
 test("status reports active paused cancelled and complete work counts", requiresJj, withRepo((repo, env) => {
@@ -619,12 +620,12 @@ test("review refuses missing work directory and non-numeric issue id", requiresJ
 
   const missingWork = slopflow(repo, env, "review", "2");
   assert.equal(missingWork.status, 2);
-  assert.match(missingWork.stderr, /status: blocked/);
-  assert.match(missingWork.stderr, /slopflow start 2/);
+  assert.match(missingWork.stdout, /status: blocked/);
+  assert.match(missingWork.stdout, /slopflow start 2/);
 
   const invalidId = slopflow(repo, env, "review", "abc");
   assert.equal(invalidId.status, 2);
-  assert.match(invalidId.stderr, /Issue id must be a plain number/);
+  assert.match(invalidId.stdout, /Issue id must be a plain number/);
 }));
 
 test("complete marks work complete and generates completion note", requiresJj, withRepo((repo, env) => {
@@ -766,11 +767,11 @@ test("complete validates issue id, work directory, and contract", requiresJj, wi
   assert.equal(slopflow(repo, env, "init").status, 0);
   const invalidId = slopflow(repo, env, "complete", "abc");
   assert.equal(invalidId.status, 2);
-  assert.match(invalidId.stderr, /Issue id must be a plain number/);
+  assert.match(invalidId.stdout, /Issue id must be a plain number/);
 
   const missingWork = slopflow(repo, env, "complete", "2");
   assert.equal(missingWork.status, 2);
-  assert.match(missingWork.stderr, /slopflow start 2/);
+  assert.match(missingWork.stdout, /slopflow start 2/);
 
   assert.equal(slopflow(repo, env, "start", "2").status, 0);
   rmSync(join(repo, ".slopflow", "work", "2", "contract.md"));

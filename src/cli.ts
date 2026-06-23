@@ -138,7 +138,6 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
           message: error.message,
           ...(error.hint ? { hint: error.hint } : {}),
         },
-        process.stderr,
       );
       return error.code;
     }
