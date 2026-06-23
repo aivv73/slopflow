@@ -91,3 +91,11 @@ Its output statuses are `pending` when `review.json` is missing, `complete` when
 **Machine config**:
 The minimal `.slopflow/config.json` file that stores CLI-readable project settings such as artifact root, issue tracker, and version-control type.
 _Avoid_: Agent instructions, domain docs, product spec
+
+**Agent skill**:
+A distributable instruction package that teaches an agent harness how to follow Slopflow safely. Agent skills are distributed through a skills installer such as Vercel Skills rather than being installed or wired into each agent harness by the Slopflow CLI.
+_Avoid_: CLI plugin, runtime integration, built-in agent adapter
+
+**npm package**:
+The Slopflow distribution artifact for the command-line tool. It should contain the executable CLI and package metadata, while agent skill placement is delegated to the skills installer.
+_Avoid_: Universal agent harness installer, skills manager

@@ -88,6 +88,38 @@ npx skills add aivv73/slopflow --skill slopflow-live
 
 The portable skill does not execute shell commands during rendering. The live skill uses Claude-compatible read-only shell interpolation to inject current Slopflow and Jujutsu context.
 
+Agent skills are installed separately through Vercel Skills. The Slopflow npm package distributes the CLI and does not install skills into Claude, Pi, Cursor, or other agent harness directories.
+
+## Install
+
+Once Slopflow is published to npm, install the CLI globally:
+
+```bash
+npm install -g slopflow
+```
+
+Then run:
+
+```bash
+slopflow --help
+slopflow status
+```
+
+For local development from a clone:
+
+```bash
+npm install
+npm run build
+npm link
+slopflow status
+```
+
+To remove the local link later:
+
+```bash
+npm unlink -g slopflow
+```
+
 ## Development
 
 Slopflow uses TypeScript and npm for the CLI implementation.
@@ -108,4 +140,22 @@ Build the CLI:
 
 ```bash
 npm run build
+```
+
+Check the npm package contents:
+
+```bash
+npm run pack:check
+```
+
+Run the install smoke test:
+
+```bash
+npm run pack:smoke
+```
+
+Run full local CI:
+
+```bash
+npm run ci
 ```

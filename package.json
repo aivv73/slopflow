@@ -4,6 +4,22 @@
   "description": "Controlled issue execution workflow for AI coding agents",
   "license": "MIT",
   "type": "module",
+  "keywords": [
+    "ai",
+    "agents",
+    "cli",
+    "workflow",
+    "jujutsu",
+    "slopflow"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aivv73/slopflow.git"
+  },
+  "homepage": "https://github.com/aivv73/slopflow#readme",
+  "bugs": {
+    "url": "https://github.com/aivv73/slopflow/issues"
+  },
   "bin": {
     "slopflow": "./dist/cli.js"
   },
@@ -14,6 +30,9 @@
   ],
   "scripts": {
     "build": "npx -y -p typescript@5.9.3 -p @types/node@24.13.2 tsc -p tsconfig.json",
+    "ci": "npm test && npm run pack:smoke",
+    "pack:check": "npm run build && npm pack --dry-run",
+    "pack:smoke": "npm run build && node scripts/pack-smoke.mjs",
     "prepare": "npm run build",
     "test": "npm run build && node --test"
   },
