@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { createInterface } from "node:readline/promises";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -113,7 +114,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       return doctorCommand({ json: args.includes("--json") });
     }
     if (command === "install") {
-      return installCommand(args);
+      return await installCommand(args);
     }
     if (command === "skill") {
       return skillCommand(args);
@@ -294,106 +295,368 @@ function doctorDetail(value: string, limit = 160): string {
   return normalized.length > limit ? `${normalized.slice(0, limit)}...` : normalized;
 }
 
-function installCommand(args: string[]): number {
-  const [profile, ...flags] = args;
-  if (profile !== "minimal" && profile !== "recommended") {
-    throw new SlopflowError("Unsupported install profile.", "Run `slopflow install minimal` or `slopflow install recommended`.", 2);
-  }
-  const yes = flags.includes("--yes");
-  const force = flags.includes("--force");
+type Harness = "pi" | "claude-code" | "generic";
+
+type InstallArgs = {
+  harness: Harness;
+  yes: boolean;
+  force: boolean;
+};
+
+type InstallPackFile = {
+  destination: string;
+  content: string;
+};
+
+type PlannedInstallFile = InstallPackFile & {
+  action: "create" | "preserve" | "overwrite" | "conflict";
+};
+
+async function installCommand(args: string[]): Promise<number> {
+  const parsed = await parseInstallArgs(args);
   const repo = discoverRepoContext(process.cwd());
-  const configPath = join(repo.root, ".slopflow", "config.json");
-  const desired = desiredConfig(repo.githubRepo);
-  const workPath = join(repo.root, desired.artifact_root);
-  const configExists = existsSync(configPath);
-  const workExists = existsSync(workPath);
-  const manifestPath = join(repo.root, ".pi", "slopflow-packages.json");
-  const manifestExists = existsSync(manifestPath);
-
-  let configAction: "create" | "preserve" | "refresh" = configExists ? "preserve" : "create";
-  if (configExists) {
-    const existing = readJson(configPath);
-    if (stableStringify(existing) !== stableStringify(desired)) {
-      if (!force) {
-        throw new SlopflowError(
-          "Existing .slopflow/config.json differs from detected config.",
-          "Inspect it or rerun with `slopflow install minimal --yes --force` to refresh project-local config.",
-          2,
-        );
-      }
-      configAction = "refresh";
-    }
+  const files = buildHarnessInstallPack(repo.root, parsed.harness);
+  const plan = files.map((file): PlannedInstallFile => {
+    if (!existsSync(file.destination)) return { ...file, action: "create" };
+    const current = readFileSync(file.destination, "utf8");
+    if (current === file.content) return { ...file, action: "preserve" };
+    if (parsed.harness === "pi" && file.destination === join(repo.root, ".pi", "settings.json")) return { ...file, action: "overwrite" };
+    return { ...file, action: parsed.force ? "overwrite" : "conflict" };
+  });
+  const conflict = plan.find((file) => file.action === "conflict");
+  if (conflict) {
+    throw new SlopflowError(
+      "Existing harness workflow pack file differs from Slopflow pack.",
+      `Inspect ${relativeToCwd(conflict.destination)} or rerun with \`slopflow install --harness ${parsed.harness} --yes --force\` to overwrite project-local pack files.`,
+      2,
+    );
   }
-  const workAction: "create" | "preserve" = workExists ? "preserve" : "create";
-  const manifestAction: "create" | "preserve" = manifestExists ? "preserve" : "create";
 
-  if (!yes) {
+  const counts = countInstallActions(plan);
+  const summary = harnessInstallSummary(parsed.harness, repo.root);
+  if (!parsed.yes) {
     printBlock("install", {
       status: "planned",
-      profile,
+      harness: parsed.harness,
       mode: "dry-run",
-      repo: repo.githubRepo,
-      config: relativeToCwd(configPath),
-      "config-action": configAction,
-      "work-root": desired.artifact_root,
-      "work-root-action": workAction,
-      ...(profile === "recommended" ? {
-        manifest: relativeToCwd(manifestPath),
-        "manifest-action": manifestAction,
-        "suggested-command": "npx skills add aivv73/slopflow --skill slopflow-live",
-      } : {}),
+      ...summary,
+      "file-count": plan.length,
+      "create-count": counts.create,
+      "preserve-count": counts.preserve,
+      "overwrite-count": counts.overwrite,
       writes: "none",
-      "next-step": `slopflow install ${profile} --yes`,
+      "next-step": `slopflow install --harness ${parsed.harness} --yes`,
     });
     return 0;
   }
 
-  if (configAction !== "preserve") {
-    mkdirSync(dirname(configPath), { recursive: true });
-    writeJson(configPath, desired);
-  }
-  mkdirSync(workPath, { recursive: true });
-  if (profile === "recommended" && manifestAction !== "preserve") {
-    mkdirSync(dirname(manifestPath), { recursive: true });
-    writeJson(manifestPath, buildRecommendedInstallManifest());
+  for (const file of plan) {
+    if (file.action === "preserve") continue;
+    mkdirSync(dirname(file.destination), { recursive: true });
+    writeFileSync(file.destination, file.content, "utf8");
   }
   printBlock("install", {
-    status: configAction === "preserve" && workAction === "preserve" && (profile === "minimal" || manifestAction === "preserve") ? "unchanged" : "applied",
-    profile,
+    status: counts.create === 0 && counts.overwrite === 0 ? "unchanged" : "applied",
+    harness: parsed.harness,
     mode: "apply",
-    repo: repo.githubRepo,
-    config: relativeToCwd(configPath),
-    "config-action": configAction,
-    "work-root": desired.artifact_root,
-    "work-root-action": workAction,
-    ...(profile === "recommended" ? {
-      manifest: relativeToCwd(manifestPath),
-      "manifest-action": manifestAction,
-      "suggested-command": "npx skills add aivv73/slopflow --skill slopflow-live",
-    } : {}),
+    ...summary,
+    "file-count": plan.length,
+    "written-count": counts.create + counts.overwrite,
+    "preserve-count": counts.preserve,
+    "overwrite-count": counts.overwrite,
     writes: "project-local",
     "next-step": "slopflow doctor",
   });
   return 0;
 }
 
-function buildRecommendedInstallManifest(): Record<string, unknown> {
+async function parseInstallArgs(args: string[]): Promise<InstallArgs> {
+  if (args[0] === "minimal") {
+    throw new SlopflowError(
+      "`slopflow install minimal` has been replaced by `slopflow init`.",
+      "Run `slopflow init` for minimal setup, or `slopflow install --harness pi|claude-code|generic` for a harness workflow pack.",
+      2,
+    );
+  }
+  if (args[0] === "recommended") {
+    throw new SlopflowError(
+      "`slopflow install recommended` has been replaced by explicit harness workflow packs.",
+      "Run `slopflow install --harness pi|claude-code|generic`.",
+      2,
+    );
+  }
+
+  let harness: Harness | null = null;
+  let yes = false;
+  let force = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--yes") {
+      yes = true;
+    } else if (arg === "--force") {
+      force = true;
+    } else if (arg === "--harness") {
+      const next = args[index + 1];
+      if (!next) throw new SlopflowError("Missing harness value.", "Run `slopflow install --harness pi|claude-code|generic`.", 2);
+      harness = parseHarness(next);
+      index += 1;
+    } else if (arg?.startsWith("--harness=")) {
+      harness = parseHarness(arg.slice("--harness=".length));
+    } else if (arg) {
+      throw new SlopflowError("Unsupported install argument.", "Run `slopflow install --harness pi|claude-code|generic [--yes] [--force]`.", 2);
+    }
+  }
+  if (!harness && process.stdin.isTTY && process.stdout.isTTY) {
+    harness = await promptForHarness();
+  }
+  if (!harness) {
+    throw new SlopflowError("Missing harness selection.", "Run `slopflow install --harness pi|claude-code|generic`.", 2);
+  }
+  return { harness, yes, force };
+}
+
+function parseHarness(value: string): Harness {
+  if (value === "pi" || value === "claude-code" || value === "generic") return value;
+  throw new SlopflowError("Unsupported harness.", "Use one of: pi, claude-code, generic.", 2);
+}
+
+async function promptForHarness(): Promise<Harness> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await rl.question("Which agent harness do you use? [pi/claude-code/generic] ")).trim().toLowerCase();
+    if (answer === "1") return "pi";
+    if (answer === "2") return "claude-code";
+    if (answer === "3" || answer === "other") return "generic";
+    return parseHarness(answer);
+  } finally {
+    rl.close();
+  }
+}
+
+function buildHarnessInstallPack(root: string, harness: Harness): InstallPackFile[] {
+  const files: InstallPackFile[] = [];
+  if (harness === "pi") {
+    files.push(...collectSkillPack("slopflow-live", join(root, ".pi", "skills", "slopflow-live")));
+    files.push(...collectSkillPack("setup-slopflow-skills-live", join(root, ".pi", "skills", "setup-slopflow-skills-live")));
+    files.push({ destination: join(root, ".pi", "settings.json"), content: piSettingsTemplate(root) });
+    files.push({ destination: join(root, ".pi", "extensions", "slopflow", "index.ts"), content: piExtensionTemplate() });
+    files.push({ destination: join(root, ".pi", "agents", "slopflow-planner.md"), content: piAgentRoleTemplate("planner") });
+    files.push({ destination: join(root, ".pi", "agents", "slopflow-executor.md"), content: piAgentRoleTemplate("executor") });
+    files.push({ destination: join(root, ".pi", "agents", "slopflow-reviewer.md"), content: piAgentRoleTemplate("reviewer") });
+  } else if (harness === "claude-code") {
+    files.push(...collectSkillPack("slopflow-live", join(root, ".claude", "skills", "slopflow-live")));
+    files.push(...collectSkillPack("setup-slopflow-skills-live", join(root, ".claude", "skills", "setup-slopflow-skills-live")));
+  } else {
+    files.push(...collectSkillPack("slopflow", join(root, ".agents", "skills", "slopflow")));
+    files.push(...collectSkillPack("setup-slopflow-skills", join(root, ".agents", "skills", "setup-slopflow-skills")));
+  }
+  return files.sort((left, right) => left.destination.localeCompare(right.destination));
+}
+
+function collectSkillPack(skillName: string, destinationRoot: string): InstallPackFile[] {
+  const sourceRoot = join(packageRoot(), "skills", skillName);
+  if (!existsSync(sourceRoot)) {
+    throw new SlopflowError(`Slopflow skill pack asset is missing: skills/${skillName}.`, "Reinstall the slopflow npm package or run from a complete source checkout.", 2);
+  }
+  const files: InstallPackFile[] = [];
+  for (const path of listFilesRecursive(sourceRoot)) {
+    files.push({
+      destination: join(destinationRoot, relative(sourceRoot, path)),
+      content: readFileSync(path, "utf8"),
+    });
+  }
+  return files;
+}
+
+function listFilesRecursive(root: string): string[] {
+  const result: string[] = [];
+  for (const entry of readdirSync(root).sort()) {
+    const path = join(root, entry);
+    const stat = statSync(path);
+    if (stat.isDirectory()) {
+      result.push(...listFilesRecursive(path));
+    } else if (stat.isFile()) {
+      result.push(path);
+    }
+  }
+  return result;
+}
+
+function packageRoot(): string {
+  return resolve(dirname(fileURLToPath(import.meta.url)), "..");
+}
+
+function countInstallActions(plan: PlannedInstallFile[]): Record<"create" | "preserve" | "overwrite", number> {
   return {
-    schema_version: 1,
-    profile: "recommended",
-    generated_by: "slopflow install recommended",
-    project_local_only: true,
-    suggested_commands: [
-      "npx skills add aivv73/slopflow --skill setup-slopflow-skills-live",
-      "npx skills add aivv73/slopflow --skill slopflow-live",
-      "npx skills add aivv73/slopflow --skill slopflow",
-    ],
-    notes: [
-      "Slopflow does not run these commands automatically.",
-      "Review agent harness documentation before installing global or user-level integrations.",
-    ],
+    create: plan.filter((file) => file.action === "create").length,
+    preserve: plan.filter((file) => file.action === "preserve").length,
+    overwrite: plan.filter((file) => file.action === "overwrite").length,
   };
 }
+
+function harnessInstallSummary(harness: Harness, root: string): Record<string, string> {
+  if (harness === "pi") {
+    return {
+      skills: relativeToCwd(join(root, ".pi", "skills")),
+      extensions: relativeToCwd(join(root, ".pi", "extensions")),
+      agents: relativeToCwd(join(root, ".pi", "agents")),
+      settings: relativeToCwd(join(root, ".pi", "settings.json")),
+      packages: String(PI_RECOMMENDED_PACKAGES.length),
+    };
+  }
+  if (harness === "claude-code") {
+    return { skills: relativeToCwd(join(root, ".claude", "skills")), extensions: "not-supported", agents: "not-supported" };
+  }
+  return { skills: relativeToCwd(join(root, ".agents", "skills")), "live-skills": "skipped", extensions: "skipped", agents: "skipped" };
+}
+
+const PI_RECOMMENDED_PACKAGES = [
+  "npm:@howaboua/pi-codex-conversion",
+  "git:github.com/joelhooks/pi-skill-interpolation",
+  "npm:@tintinweb/pi-subagents",
+  "npm:pi-codex-goal",
+];
+
+function piSettingsTemplate(root: string): string {
+  const settingsPath = join(root, ".pi", "settings.json");
+  let settings: Record<string, unknown> = {};
+  if (existsSync(settingsPath)) {
+    const existing = readJson(settingsPath);
+    if (!existing || typeof existing !== "object" || Array.isArray(existing)) {
+      throw new SlopflowError("Invalid .pi/settings.json shape.", "Expected a JSON object before merging Slopflow Pi packages.", 2);
+    }
+    settings = existing as Record<string, unknown>;
+  }
+  const existingPackages = Array.isArray(settings.packages) ? settings.packages.filter((value): value is string => typeof value === "string") : [];
+  settings.packages = [...existingPackages, ...PI_RECOMMENDED_PACKAGES.filter((pkg) => !existingPackages.includes(pkg))];
+  return `${JSON.stringify(settings, null, 2)}\n`;
+}
+
+function piExtensionTemplate(): string {
+  return `import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+export default function (pi: ExtensionAPI) {
+  pi.registerCommand("slopflow-status", {
+    description: "Show project Slopflow status",
+    handler: async (_args, ctx) => {
+      const result = await pi.exec("slopflow", ["status"], { timeout: 10_000 });
+      const output = result.stdout || result.stderr || "slopflow status produced no output";
+      ctx.ui.notify(output.trim(), result.code === 0 ? "info" : "warning");
+    },
+  });
+
+  pi.registerCommand("slopflow-doctor", {
+    description: "Run Slopflow doctor for this project",
+    handler: async (_args, ctx) => {
+      const result = await pi.exec("slopflow", ["doctor"], { timeout: 10_000 });
+      const output = result.stdout || result.stderr || "slopflow doctor produced no output";
+      ctx.ui.notify(output.trim(), result.code === 0 ? "info" : "warning");
+    },
+  });
+
+  pi.registerCommand("slopflow-create-goal", {
+    description: "Prepare a pi-codex-goal /create-goal prompt from a Slopflow issue",
+    handler: async (args, ctx) => {
+      const issueId = args.trim();
+      if (!/^\\d+$/.test(issueId)) {
+        ctx.ui.notify("Usage: /slopflow-create-goal <issue-id>", "warning");
+        return;
+      }
+      const start = await pi.exec("slopflow", ["start", issueId], { timeout: 30_000 });
+      if (start.code !== 0) {
+        ctx.ui.notify((start.stdout || start.stderr || "slopflow start failed").trim(), "error");
+        return;
+      }
+      const goalPrompt = start.stdout.match(/goal-prompt:\\s*(.+)/)?.[1]?.trim() ?? ".slopflow/work/" + issueId + "/goal-prompt.md";
+      const absoluteGoalPrompt = resolve(ctx.cwd, goalPrompt);
+      if (!existsSync(absoluteGoalPrompt)) {
+        ctx.ui.notify("Slopflow goal prompt not found: " + goalPrompt, "error");
+        return;
+      }
+      const prompt = readFileSync(absoluteGoalPrompt, "utf8").trim();
+      ctx.ui.setEditorText("/create-goal " + prompt);
+      ctx.ui.notify("Prepared /create-goal from " + goalPrompt + ". Review and submit when ready.", "info");
+    },
+  });
+}
+`;
+}
+
+
+function piAgentRoleTemplate(role: "planner" | "executor" | "reviewer"): string {
+  if (role === "planner") {
+    return `---
+description: Plan controlled Slopflow issue execution before code changes
+tools: read, grep, find, bash, ls
+skills: slopflow-live
+thinking: medium
+max_turns: 20
+prompt_mode: replace
+---
+
+You are a Slopflow planning specialist.
+
+Your job is to turn a GitHub issue or Slopflow work directory into a safe implementation plan.
+
+Rules:
+
+- Treat \`.slopflow/work/<issue-id>/\` artifacts as canonical.
+- Do not edit files.
+- Do not create commits, branches, PRs, or issues.
+- Do not run mutating Slopflow lifecycle commands.
+- Prefer read-only commands such as \`slopflow status\`, \`slopflow doctor\`, \`ls\`, \`grep\`, and file reads.
+- Produce a concise implementation plan with scope, affected files, risks, test plan, and Slopflow lifecycle next step.
+`;
+  }
+  if (role === "executor") {
+    return `---
+description: Execute Slopflow issue work while preserving evidence and lifecycle artifacts
+tools: "*"
+skills: slopflow-live
+thinking: medium
+max_turns: 50
+prompt_mode: append
+---
+
+You are a Slopflow execution specialist.
+
+Follow the parent project instructions and the Slopflow lifecycle strictly.
+
+Required behavior:
+
+- Use \`slopflow start <issue-id>\` before issue execution when no work directory exists.
+- Use \`slopflow test <issue-id> --name <gate> -- <command...>\` to record test evidence.
+- Do not manually fabricate test evidence, review verdicts, completion notes, or status metadata.
+- Do not push, merge, publish, create a pull request, or close an issue unless explicitly requested.
+- Before claiming done, ensure Slopflow evidence and review/completion requirements are satisfied.
+`;
+  }
+  return `---
+description: Review Slopflow work packets and verify completion gates
+tools: read, grep, find, bash, ls
+skills: slopflow-live
+thinking: high
+max_turns: 25
+prompt_mode: replace
+---
+
+You are a Slopflow review specialist.
+
+Review whether work is safe to call complete.
+
+Rules:
+
+- Treat \`.slopflow/work/<issue-id>/\` artifacts as canonical.
+- Do not edit source files.
+- Do not write review verdicts unless explicitly asked to produce a verdict artifact.
+- Inspect test evidence, status metadata, completion notes, and relevant diffs.
+- Verify that claimed changes match the issue contract.
+- Report verdict recommendation, missing evidence, risks, required changes, and exact files or artifacts inspected.
+`;
+}
+
 
 type LintCheck = {
   name: string;
@@ -1770,7 +2033,7 @@ function printJson(value: unknown, stream: NodeJS.WritableStream = process.stdou
 
 function printHelp(): void {
   process.stdout.write(
-    `Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  doctor\n  install minimal [--yes] [--force]\n  install recommended [--yes] [--force]\n  start <issue-id>\n  pause <issue-id> --reason <text>\n  resume <issue-id>\n  cancel <issue-id> --reason <text>\n  test <issue-id> --name <gate> -- <command...>\n  review <issue-id>\n  complete <issue-id>\n`,
+    `Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  doctor\n  install --harness pi|claude-code|generic [--yes] [--force]\n  start <issue-id>\n  pause <issue-id> --reason <text>\n  resume <issue-id>\n  cancel <issue-id> --reason <text>\n  test <issue-id> --name <gate> -- <command...>\n  review <issue-id>\n  complete <issue-id>\n`,
   );
 }
 

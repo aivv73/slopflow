@@ -8,6 +8,7 @@ The first vertical slice provides:
 
 ```bash
 slopflow init
+slopflow install --harness pi
 slopflow status
 slopflow start <issue-id>
 slopflow pause <issue-id> --reason <text>
@@ -95,39 +96,35 @@ Severity rules:
 
 Doctor detail strings are intentionally bounded and summarized so setup diagnostics stay agent-readable instead of dumping full command output.
 
-Initialize Slopflow machine config in a Jujutsu-backed GitHub repo:
+Initialize the project-local Slopflow contract in a Jujutsu-backed GitHub repo:
 
 ```bash
 slopflow init
 ```
 
-Preview minimal project-local setup without writing files:
+`init` writes only Slopflow core state: `.slopflow/config.json` and `.slopflow/work/`. Existing incompatible config blocks unless rerun with explicit `--force`.
+
+Install the Slopflow workflow pack for the agent harness used by this project. The command asks interactively when run in a TTY; scripts should pass `--harness` explicitly. Dry-run is the default:
 
 ```bash
-slopflow install minimal
+slopflow install --harness pi
+slopflow install --harness claude-code
+slopflow install --harness generic
 ```
 
-Apply minimal project-local setup after reviewing the plan:
+Apply after reviewing the plan:
 
 ```bash
-slopflow install minimal --yes
+slopflow install --harness pi --yes
 ```
 
-`install minimal` only writes project-local Slopflow files such as `.slopflow/config.json` and `.slopflow/work/`. It does not mutate global agent configuration, install packages globally, push, publish, create PRs, close issues, or merge changes. Existing incompatible config blocks unless rerun with explicit `--force`.
+Harness packs are project-local only:
 
-Preview recommended project-local setup without writing files:
+- `pi` writes `.pi/skills/`, `.pi/extensions/`, `.pi/agents/`, and merges `.pi/settings.json` with the recommended Pi package stack: `npm:@howaboua/pi-codex-conversion`, `git:github.com/joelhooks/pi-skill-interpolation`, `npm:@tintinweb/pi-subagents`, and `npm:pi-codex-goal`. The local Slopflow Pi extension registers `/slopflow-status`, `/slopflow-doctor`, and `/slopflow-create-goal <issue-id>`; the goal command runs `slopflow start`, reads the generated `goal-prompt.md`, and pre-fills pi-codex-goal's `/create-goal` prompt for user review.
+- `claude-code` writes live Slopflow skills under `.claude/skills/`.
+- `generic` writes portable Agent Skills under `.agents/skills/`.
 
-```bash
-slopflow install recommended
-```
-
-Apply recommended project-local setup after reviewing the plan:
-
-```bash
-slopflow install recommended --yes
-```
-
-`install recommended` applies the minimal Slopflow setup and writes a project-local `.pi/slopflow-packages.json` manifest with suggested skill installation commands. It does not run those commands automatically and does not mutate global Claude, Pi, Cursor, or other agent harness configuration.
+`install` does not mutate global Claude, Pi, Cursor, or other agent harness configuration; it does not install global packages, push, publish, create PRs, close issues, or merge changes. Existing differing harness pack files block unless rerun with explicit `--force`. `slopflow install minimal` is replaced by `slopflow init`; `slopflow install recommended` is replaced by explicit harness workflow packs.
 
 Validate repository-distributed Slopflow skills without modifying files:
 

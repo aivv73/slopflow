@@ -191,97 +191,139 @@ test("init detects repo root from subdirectory", requiresJj, withRepo((repo, env
   assert.doesNotThrow(() => readFileSync(join(repo, ".slopflow", "config.json")));
 }));
 
-test("install minimal dry-run prints plan without writing", requiresJj, withRepo((repo, env) => {
+test("install minimal is replaced by init", requiresJj, withRepo((repo, env) => {
   const result = slopflow(repo, env, "install", "minimal");
+
+  assert.equal(result.status, 2);
+  assert.match(result.stdout, /status: blocked/);
+  assert.match(result.stdout, /install minimal.*replaced by `slopflow init`/);
+  assert.match(result.stdout, /slopflow init/);
+}));
+
+test("install requires explicit harness in non-interactive mode", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env, "install");
+
+  assert.equal(result.status, 2);
+  assert.match(result.stdout, /Missing harness selection/);
+  assert.match(result.stdout, /slopflow install --harness pi\|claude-code\|generic/);
+}));
+
+test("install pi dry-run prints project-local workflow pack plan without writing", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env, "install", "--harness", "pi");
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /install:/);
   assert.match(result.stdout, /status: planned/);
-  assert.match(result.stdout, /profile: minimal/);
+  assert.match(result.stdout, /harness: pi/);
   assert.match(result.stdout, /mode: dry-run/);
-  assert.match(result.stdout, /config-action: create/);
-  assert.match(result.stdout, /work-root-action: create/);
+  assert.match(result.stdout, /skills: \.pi\/skills/);
+  assert.match(result.stdout, /extensions: \.pi\/extensions/);
+  assert.match(result.stdout, /agents: \.pi\/agents/);
+  assert.match(result.stdout, /settings: \.pi\/settings\.json/);
+  assert.match(result.stdout, /packages: 4/);
   assert.match(result.stdout, /writes: none/);
-  assert.match(result.stdout, /next-step: slopflow install minimal --yes/);
-  assert.equal(existsSync(join(repo, ".slopflow", "config.json")), false);
-  assert.equal(existsSync(join(repo, ".slopflow", "work")), false);
+  assert.match(result.stdout, /next-step: slopflow install --harness pi --yes/);
+  assert.equal(existsSync(join(repo, ".pi", "skills", "slopflow-live", "SKILL.md")), false);
+  assert.equal(existsSync(join(repo, ".pi", "settings.json")), false);
+  assert.equal(existsSync(join(repo, ".pi", "extensions", "slopflow", "index.ts")), false);
 }));
 
-test("install minimal --yes applies project-local setup", requiresJj, withRepo((repo, env) => {
-  const result = slopflow(repo, env, "install", "minimal", "--yes");
+test("install pi --yes writes local extensions live skills and agent roles", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env, "install", "--harness", "pi", "--yes");
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /status: applied/);
-  assert.match(result.stdout, /mode: apply/);
+  assert.match(result.stdout, /harness: pi/);
   assert.match(result.stdout, /writes: project-local/);
-  assert.match(result.stdout, /next-step: slopflow doctor/);
-  assert.equal(existsSync(join(repo, ".slopflow", "config.json")), true);
-  assert.equal(existsSync(join(repo, ".slopflow", "work")), true);
+  assert.equal(existsSync(join(repo, ".pi", "skills", "slopflow-live", "SKILL.md")), true);
+  assert.equal(existsSync(join(repo, ".pi", "skills", "setup-slopflow-skills-live", "SKILL.md")), true);
+  const extension = readFileSync(join(repo, ".pi", "extensions", "slopflow", "index.ts"), "utf8");
+  assert.match(extension, /slopflow-create-goal/);
+  assert.match(extension, /\/create-goal /);
+  assert.match(extension, /slopflow", \["start", issueId\]/);
+  const settings = JSON.parse(readFileSync(join(repo, ".pi", "settings.json"), "utf8"));
+  assert.deepEqual(settings.packages, [
+    "npm:@howaboua/pi-codex-conversion",
+    "git:github.com/joelhooks/pi-skill-interpolation",
+    "npm:@tintinweb/pi-subagents",
+    "npm:pi-codex-goal",
+  ]);
+  const planner = readFileSync(join(repo, ".pi", "agents", "slopflow-planner.md"), "utf8");
+  const executor = readFileSync(join(repo, ".pi", "agents", "slopflow-executor.md"), "utf8");
+  const reviewer = readFileSync(join(repo, ".pi", "agents", "slopflow-reviewer.md"), "utf8");
+  assert.match(planner, /tools: read, grep, find, bash, ls/);
+  assert.match(planner, /skills: slopflow-live/);
+  assert.match(planner, /prompt_mode: replace/);
+  assert.doesNotMatch(planner, /name: slopflow-planner/);
+  assert.match(executor, /tools: "\*"/);
+  assert.match(executor, /prompt_mode: append/);
+  assert.match(reviewer, /thinking: high/);
+  assert.match(reviewer, /max_turns: 25/);
 }));
 
-test("install minimal --yes is idempotent for compatible setup", requiresJj, withRepo((repo, env) => {
-  assert.equal(slopflow(repo, env, "install", "minimal", "--yes").status, 0);
+test("install pi merges existing project settings packages", requiresJj, withRepo((repo, env) => {
+  mkdirSync(join(repo, ".pi"), { recursive: true });
+  writeFileSync(join(repo, ".pi", "settings.json"), JSON.stringify({ packages: ["npm:existing-pkg"], enableSkillCommands: true }, null, 2), "utf8");
 
-  const second = slopflow(repo, env, "install", "minimal", "--yes");
+  const result = slopflow(repo, env, "install", "--harness", "pi", "--yes");
+
+  assert.equal(result.status, 0, result.stderr);
+  const settings = JSON.parse(readFileSync(join(repo, ".pi", "settings.json"), "utf8"));
+  assert.equal(settings.enableSkillCommands, true);
+  assert.deepEqual(settings.packages, [
+    "npm:existing-pkg",
+    "npm:@howaboua/pi-codex-conversion",
+    "git:github.com/joelhooks/pi-skill-interpolation",
+    "npm:@tintinweb/pi-subagents",
+    "npm:pi-codex-goal",
+  ]);
+}));
+
+test("install claude-code --yes writes local live skills", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env, "install", "--harness=claude-code", "--yes");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /harness: claude-code/);
+  assert.equal(existsSync(join(repo, ".claude", "skills", "slopflow-live", "SKILL.md")), true);
+  assert.equal(existsSync(join(repo, ".claude", "skills", "setup-slopflow-skills-live", "SKILL.md")), true);
+  assert.equal(existsSync(join(repo, ".pi")), false);
+}));
+
+test("install generic --yes writes portable agent skills", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env, "install", "--harness", "generic", "--yes");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /harness: generic/);
+  assert.match(result.stdout, /live-skills: skipped/);
+  assert.equal(existsSync(join(repo, ".agents", "skills", "slopflow", "SKILL.md")), true);
+  assert.equal(existsSync(join(repo, ".agents", "skills", "setup-slopflow-skills", "SKILL.md")), true);
+  assert.equal(existsSync(join(repo, ".claude")), false);
+}));
+
+test("install harness is idempotent for matching pack files", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "install", "--harness", "generic", "--yes").status, 0);
+
+  const second = slopflow(repo, env, "install", "--harness", "generic", "--yes");
 
   assert.equal(second.status, 0, second.stderr);
   assert.match(second.stdout, /status: unchanged/);
-  assert.match(second.stdout, /config-action: preserve/);
-  assert.match(second.stdout, /work-root-action: preserve/);
+  assert.match(second.stdout, /written-count: 0/);
 }));
 
-test("install minimal blocks incompatible existing config unless forced", requiresJj, withRepo((repo, env) => {
-  assert.equal(slopflow(repo, env, "install", "minimal", "--yes").status, 0);
-  const configPath = join(repo, ".slopflow", "config.json");
-  const config = JSON.parse(readFileSync(configPath, "utf8"));
-  config.artifact_root = ".elsewhere/work";
-  writeFileSync(configPath, JSON.stringify(config), "utf8");
+test("install harness blocks conflicting pack files unless forced", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "install", "--harness", "generic", "--yes").status, 0);
+  const skillPath = join(repo, ".agents", "skills", "slopflow", "SKILL.md");
+  writeFileSync(skillPath, "locally changed\n", "utf8");
 
-  const blocked = slopflow(repo, env, "install", "minimal", "--yes");
+  const blocked = slopflow(repo, env, "install", "--harness", "generic", "--yes");
   assert.equal(blocked.status, 2);
-  assert.match(blocked.stdout, /status: blocked/);
-  assert.match(blocked.stdout, /differs from detected config/);
-  assert.match(blocked.stdout, /slopflow install minimal --yes --force/);
+  assert.match(blocked.stdout, /Existing harness workflow pack file differs/);
+  assert.match(blocked.stdout, /slopflow install --harness generic --yes --force/);
 
-  const forced = slopflow(repo, env, "install", "minimal", "--yes", "--force");
+  const forced = slopflow(repo, env, "install", "--harness", "generic", "--yes", "--force");
   assert.equal(forced.status, 0, forced.stdout);
-  assert.match(forced.stdout, /config-action: refresh/);
-  assert.equal(JSON.parse(readFileSync(configPath, "utf8")).artifact_root, ".slopflow/work");
-}));
-
-test("install recommended dry-run prints concrete project-local plan", requiresJj, withRepo((repo, env) => {
-  const result = slopflow(repo, env, "install", "recommended");
-
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /install:/);
-  assert.match(result.stdout, /status: planned/);
-  assert.match(result.stdout, /profile: recommended/);
-  assert.match(result.stdout, /mode: dry-run/);
-  assert.match(result.stdout, /manifest: \.pi\/slopflow-packages\.json/);
-  assert.match(result.stdout, /manifest-action: create/);
-  assert.match(result.stdout, /suggested-command: npx skills add aivv73\/slopflow --skill slopflow-live/);
-  assert.match(result.stdout, /writes: none/);
-  assert.equal(existsSync(join(repo, ".slopflow", "config.json")), false);
-  assert.equal(existsSync(join(repo, ".pi", "slopflow-packages.json")), false);
-}));
-
-test("install recommended --yes writes only project-local setup and manifest", requiresJj, withRepo((repo, env) => {
-  const result = slopflow(repo, env, "install", "recommended", "--yes");
-
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /status: applied/);
-  assert.match(result.stdout, /profile: recommended/);
-  assert.match(result.stdout, /writes: project-local/);
-  assert.equal(existsSync(join(repo, ".slopflow", "config.json")), true);
-  assert.equal(existsSync(join(repo, ".slopflow", "work")), true);
-  const manifest = JSON.parse(readFileSync(join(repo, ".pi", "slopflow-packages.json"), "utf8"));
-  assert.equal(manifest.profile, "recommended");
-  assert.equal(manifest.project_local_only, true);
-  assert.deepEqual(manifest.suggested_commands, [
-    "npx skills add aivv73/slopflow --skill setup-slopflow-skills-live",
-    "npx skills add aivv73/slopflow --skill slopflow-live",
-    "npx skills add aivv73/slopflow --skill slopflow",
-  ]);
+  assert.match(forced.stdout, /overwrite-count: 1/);
+  assert.match(readFileSync(skillPath, "utf8"), /name: slopflow/);
 }));
 
 test("skill lint passes valid Slopflow skill fixtures", requiresJj, withRepo((repo, env) => {
