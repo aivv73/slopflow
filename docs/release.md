@@ -4,25 +4,17 @@ This document describes the manual checklist for Slopflow's first npm release. I
 
 ## Release boundary
 
-The npm package distributes the Slopflow CLI only. It is expected to contain:
+The npm package distributes the Slopflow CLI and project-local workflow pack assets. It is expected to contain:
 
 - `dist/cli.js`
+- `skills/`
 - `README.md`
 - `LICENSE`
 - `package.json`
 
-Agent skills are distributed separately from the repository through Vercel Skills:
-
-```bash
-npx skills add aivv73/slopflow --skill setup-slopflow-skills
-npx skills add aivv73/slopflow --skill setup-slopflow-skills-live
-npx skills add aivv73/slopflow --skill slopflow
-npx skills add aivv73/slopflow --skill slopflow-live
-```
+`slopflow init` initializes only `.slopflow/config.json` and `.slopflow/work/`. `slopflow install --harness pi|claude-code|generic` may copy Slopflow-provided skills, Pi extensions, Pi agent roles, and project-local Pi package settings into project-local harness directories after an explicit `--yes`. It must not write to user/global Claude, Pi, Cursor, or other agent harness configuration.
 
 The setup skills are intended to be run first in newly onboarded projects. They configure `docs/agents/*.md` as OKF-compatible agent configuration documents before agents use the Slopflow execution skills.
-
-The npm package must not install skills into Claude, Pi, Cursor, or other agent harness directories.
 
 ## Versioning policy for 0.x
 
