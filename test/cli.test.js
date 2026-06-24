@@ -54,6 +54,9 @@ process.exit(1);
 `,
   );
   chmodSync(ghPath, 0o755);
+  const ghAxiPath = join(bin, "gh-axi");
+  writeFileSync(ghAxiPath, "#!/bin/sh\necho 'gh-axi 0.0.0-test'\n", "utf8");
+  chmodSync(ghAxiPath, 0o755);
   return { dir, repo, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } };
 }
 
@@ -199,18 +202,18 @@ test("doctor reports initialized repository readiness", requiresJj, withRepo((re
 
   assert.equal(result.status, 0, result.stdout);
   assert.match(result.stdout, /doctor:/);
-  assert.match(result.stdout, /status: warn/);
+  assert.match(result.stdout, /status: passed/);
   assert.match(result.stdout, /core: passed/);
   assert.match(result.stdout, /project-docs: passed/);
-  assert.match(result.stdout, /recommended: warn/);
+  assert.match(result.stdout, /recommended: passed/);
   assert.match(result.stdout, /failed-count: 0/);
-  assert.match(result.stdout, /warning-count: 1/);
-  assert.match(result.stdout, /next-step: run npx -y gh-axi --help when GitHub AXI operations are needed/);
+  assert.match(result.stdout, /warning-count: 0/);
+  assert.match(result.stdout, /next-step: slopflow start <issue-id>/);
   assert.match(result.stdout, /checks\[/);
   assert.match(result.stdout, /core.node: passed node v.* satisfies >=24/);
   assert.match(result.stdout, /core.config: passed/);
   assert.match(result.stdout, /recommended.gh: passed/);
-  assert.match(result.stdout, /recommended.gh-axi: warn unchecked/);
+  assert.match(result.stdout, /recommended.gh-axi: passed gh-axi executable found/);
 }));
 
 test("doctor fails before initialization and suggests init", requiresJj, withRepo((repo, env) => {

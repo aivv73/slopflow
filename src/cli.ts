@@ -228,12 +228,13 @@ function doctorCommand(): number {
   checks.push({
     name: "recommended.gh",
     status: ghPresent ? "passed" : "warn",
-    detail: ghPresent ? "gh executable found" : "gh executable missing; GitHub issue start may fail",
+    detail: doctorDetail(ghPresent ? "gh executable found" : "gh executable missing; GitHub issue start may fail"),
   });
+  const ghAxiPresent = commandExists("gh-axi");
   checks.push({
     name: "recommended.gh-axi",
-    status: "warn",
-    detail: "unchecked; run npx -y gh-axi --help when GitHub AXI operations are needed",
+    status: ghAxiPresent ? "passed" : "warn",
+    detail: doctorDetail(ghAxiPresent ? "gh-axi executable found" : "unchecked; run npx -y gh-axi --help when GitHub AXI operations are needed"),
   });
 
   const failedCount = checks.filter((check) => check.status === "failed").length;
@@ -274,6 +275,11 @@ function nextStepForDoctor(status: string, checks: DoctorCheck[]): string {
   if (firstWarn?.name === "recommended.gh") return "install gh or continue if GitHub start is not needed";
   if (firstWarn?.name === "recommended.gh-axi") return "run npx -y gh-axi --help when GitHub AXI operations are needed";
   return "inspect doctor checks";
+}
+
+function doctorDetail(value: string, limit = 160): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > limit ? `${normalized.slice(0, limit)}...` : normalized;
 }
 
 function readPackageNodeEngine(root: string): string | null {
