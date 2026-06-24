@@ -82,6 +82,20 @@ Initialize Slopflow machine config in a Jujutsu-backed GitHub repo:
 slopflow init
 ```
 
+Preview minimal project-local setup without writing files:
+
+```bash
+slopflow install minimal
+```
+
+Apply minimal project-local setup after reviewing the plan:
+
+```bash
+slopflow install minimal --yes
+```
+
+`install minimal` only writes project-local Slopflow files such as `.slopflow/config.json` and `.slopflow/work/`. It does not mutate global agent configuration, install packages globally, push, publish, create PRs, close issues, or merge changes. Existing incompatible config blocks unless rerun with explicit `--force`.
+
 Inspect current Slopflow state:
 
 ```bash

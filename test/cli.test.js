@@ -170,6 +170,64 @@ test("init detects repo root from subdirectory", requiresJj, withRepo((repo, env
   assert.doesNotThrow(() => readFileSync(join(repo, ".slopflow", "config.json")));
 }));
 
+test("install minimal dry-run prints plan without writing", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env, "install", "minimal");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /install:/);
+  assert.match(result.stdout, /status: planned/);
+  assert.match(result.stdout, /profile: minimal/);
+  assert.match(result.stdout, /mode: dry-run/);
+  assert.match(result.stdout, /config-action: create/);
+  assert.match(result.stdout, /work-root-action: create/);
+  assert.match(result.stdout, /writes: none/);
+  assert.match(result.stdout, /next-step: slopflow install minimal --yes/);
+  assert.equal(existsSync(join(repo, ".slopflow", "config.json")), false);
+  assert.equal(existsSync(join(repo, ".slopflow", "work")), false);
+}));
+
+test("install minimal --yes applies project-local setup", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env, "install", "minimal", "--yes");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /status: applied/);
+  assert.match(result.stdout, /mode: apply/);
+  assert.match(result.stdout, /writes: project-local/);
+  assert.match(result.stdout, /next-step: slopflow doctor/);
+  assert.equal(existsSync(join(repo, ".slopflow", "config.json")), true);
+  assert.equal(existsSync(join(repo, ".slopflow", "work")), true);
+}));
+
+test("install minimal --yes is idempotent for compatible setup", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "install", "minimal", "--yes").status, 0);
+
+  const second = slopflow(repo, env, "install", "minimal", "--yes");
+
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /status: unchanged/);
+  assert.match(second.stdout, /config-action: preserve/);
+  assert.match(second.stdout, /work-root-action: preserve/);
+}));
+
+test("install minimal blocks incompatible existing config unless forced", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "install", "minimal", "--yes").status, 0);
+  const configPath = join(repo, ".slopflow", "config.json");
+  const config = JSON.parse(readFileSync(configPath, "utf8"));
+  config.artifact_root = ".elsewhere/work";
+  writeFileSync(configPath, JSON.stringify(config), "utf8");
+
+  const blocked = slopflow(repo, env, "install", "minimal", "--yes");
+  assert.equal(blocked.status, 2);
+  assert.match(blocked.stdout, /status: blocked/);
+  assert.match(blocked.stdout, /differs from detected config/);
+  assert.match(blocked.stdout, /slopflow install minimal --yes --force/);
+
+  const forced = slopflow(repo, env, "install", "minimal", "--yes", "--force");
+  assert.equal(forced.status, 0, forced.stdout);
+  assert.match(forced.stdout, /config-action: refresh/);
+  assert.equal(JSON.parse(readFileSync(configPath, "utf8")).artifact_root, ".slopflow/work");
+}));
+
 test("status reports config, jj change, active work count, and next step", requiresJj, withRepo((repo, env) => {
   assert.equal(slopflow(repo, env, "init").status, 0);
   mkdirSync(join(repo, ".slopflow", "work", "1"), { recursive: true });

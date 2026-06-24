@@ -111,6 +111,9 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     if (command === "doctor") {
       return doctorCommand();
     }
+    if (command === "install") {
+      return installCommand(args);
+    }
     if (command === "start") {
       return startCommand(args[0]);
     }
@@ -280,6 +283,72 @@ function nextStepForDoctor(status: string, checks: DoctorCheck[]): string {
 function doctorDetail(value: string, limit = 160): string {
   const normalized = value.replace(/\s+/g, " ").trim();
   return normalized.length > limit ? `${normalized.slice(0, limit)}...` : normalized;
+}
+
+function installCommand(args: string[]): number {
+  const [profile, ...flags] = args;
+  if (profile !== "minimal") {
+    throw new SlopflowError("Unsupported install profile.", "Run `slopflow install minimal`.", 2);
+  }
+  const yes = flags.includes("--yes");
+  const force = flags.includes("--force");
+  const repo = discoverRepoContext(process.cwd());
+  const configPath = join(repo.root, ".slopflow", "config.json");
+  const desired = desiredConfig(repo.githubRepo);
+  const workPath = join(repo.root, desired.artifact_root);
+  const configExists = existsSync(configPath);
+  const workExists = existsSync(workPath);
+
+  let configAction: "create" | "preserve" | "refresh" = configExists ? "preserve" : "create";
+  if (configExists) {
+    const existing = readJson(configPath);
+    if (stableStringify(existing) !== stableStringify(desired)) {
+      if (!force) {
+        throw new SlopflowError(
+          "Existing .slopflow/config.json differs from detected config.",
+          "Inspect it or rerun with `slopflow install minimal --yes --force` to refresh project-local config.",
+          2,
+        );
+      }
+      configAction = "refresh";
+    }
+  }
+  const workAction: "create" | "preserve" = workExists ? "preserve" : "create";
+
+  if (!yes) {
+    printBlock("install", {
+      status: "planned",
+      profile: "minimal",
+      mode: "dry-run",
+      repo: repo.githubRepo,
+      config: relativeToCwd(configPath),
+      "config-action": configAction,
+      "work-root": desired.artifact_root,
+      "work-root-action": workAction,
+      writes: "none",
+      "next-step": "slopflow install minimal --yes",
+    });
+    return 0;
+  }
+
+  if (configAction !== "preserve") {
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeJson(configPath, desired);
+  }
+  mkdirSync(workPath, { recursive: true });
+  printBlock("install", {
+    status: configAction === "preserve" && workAction === "preserve" ? "unchanged" : "applied",
+    profile: "minimal",
+    mode: "apply",
+    repo: repo.githubRepo,
+    config: relativeToCwd(configPath),
+    "config-action": configAction,
+    "work-root": desired.artifact_root,
+    "work-root-action": workAction,
+    writes: "project-local",
+    "next-step": "slopflow doctor",
+  });
+  return 0;
 }
 
 function readPackageNodeEngine(root: string): string | null {
@@ -1558,7 +1627,7 @@ function printBlock(name: string, values: Record<string, unknown>, stream: NodeJ
 
 function printHelp(): void {
   process.stdout.write(
-    `Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  doctor\n  start <issue-id>\n  pause <issue-id> --reason <text>\n  resume <issue-id>\n  cancel <issue-id> --reason <text>\n  test <issue-id> --name <gate> -- <command...>\n  review <issue-id>\n  complete <issue-id>\n`,
+    `Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  doctor\n  install minimal [--yes] [--force]\n  start <issue-id>\n  pause <issue-id> --reason <text>\n  resume <issue-id>\n  cancel <issue-id> --reason <text>\n  test <issue-id> --name <gate> -- <command...>\n  review <issue-id>\n  complete <issue-id>\n`,
   );
 }
 
