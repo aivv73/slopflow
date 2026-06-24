@@ -287,8 +287,8 @@ function doctorDetail(value: string, limit = 160): string {
 
 function installCommand(args: string[]): number {
   const [profile, ...flags] = args;
-  if (profile !== "minimal") {
-    throw new SlopflowError("Unsupported install profile.", "Run `slopflow install minimal`.", 2);
+  if (profile !== "minimal" && profile !== "recommended") {
+    throw new SlopflowError("Unsupported install profile.", "Run `slopflow install minimal` or `slopflow install recommended`.", 2);
   }
   const yes = flags.includes("--yes");
   const force = flags.includes("--force");
@@ -298,6 +298,8 @@ function installCommand(args: string[]): number {
   const workPath = join(repo.root, desired.artifact_root);
   const configExists = existsSync(configPath);
   const workExists = existsSync(workPath);
+  const manifestPath = join(repo.root, ".pi", "slopflow-packages.json");
+  const manifestExists = existsSync(manifestPath);
 
   let configAction: "create" | "preserve" | "refresh" = configExists ? "preserve" : "create";
   if (configExists) {
@@ -314,19 +316,25 @@ function installCommand(args: string[]): number {
     }
   }
   const workAction: "create" | "preserve" = workExists ? "preserve" : "create";
+  const manifestAction: "create" | "preserve" = manifestExists ? "preserve" : "create";
 
   if (!yes) {
     printBlock("install", {
       status: "planned",
-      profile: "minimal",
+      profile,
       mode: "dry-run",
       repo: repo.githubRepo,
       config: relativeToCwd(configPath),
       "config-action": configAction,
       "work-root": desired.artifact_root,
       "work-root-action": workAction,
+      ...(profile === "recommended" ? {
+        manifest: relativeToCwd(manifestPath),
+        "manifest-action": manifestAction,
+        "suggested-command": "npx skills add aivv73/slopflow --skill slopflow-live",
+      } : {}),
       writes: "none",
-      "next-step": "slopflow install minimal --yes",
+      "next-step": `slopflow install ${profile} --yes`,
     });
     return 0;
   }
@@ -336,19 +344,46 @@ function installCommand(args: string[]): number {
     writeJson(configPath, desired);
   }
   mkdirSync(workPath, { recursive: true });
+  if (profile === "recommended" && manifestAction !== "preserve") {
+    mkdirSync(dirname(manifestPath), { recursive: true });
+    writeJson(manifestPath, buildRecommendedInstallManifest());
+  }
   printBlock("install", {
-    status: configAction === "preserve" && workAction === "preserve" ? "unchanged" : "applied",
-    profile: "minimal",
+    status: configAction === "preserve" && workAction === "preserve" && (profile === "minimal" || manifestAction === "preserve") ? "unchanged" : "applied",
+    profile,
     mode: "apply",
     repo: repo.githubRepo,
     config: relativeToCwd(configPath),
     "config-action": configAction,
     "work-root": desired.artifact_root,
     "work-root-action": workAction,
+    ...(profile === "recommended" ? {
+      manifest: relativeToCwd(manifestPath),
+      "manifest-action": manifestAction,
+      "suggested-command": "npx skills add aivv73/slopflow --skill slopflow-live",
+    } : {}),
     writes: "project-local",
     "next-step": "slopflow doctor",
   });
   return 0;
+}
+
+function buildRecommendedInstallManifest(): Record<string, unknown> {
+  return {
+    schema_version: 1,
+    profile: "recommended",
+    generated_by: "slopflow install recommended",
+    project_local_only: true,
+    suggested_commands: [
+      "npx skills add aivv73/slopflow --skill setup-slopflow-skills-live",
+      "npx skills add aivv73/slopflow --skill slopflow-live",
+      "npx skills add aivv73/slopflow --skill slopflow",
+    ],
+    notes: [
+      "Slopflow does not run these commands automatically.",
+      "Review agent harness documentation before installing global or user-level integrations.",
+    ],
+  };
 }
 
 function readPackageNodeEngine(root: string): string | null {
@@ -1627,7 +1662,7 @@ function printBlock(name: string, values: Record<string, unknown>, stream: NodeJ
 
 function printHelp(): void {
   process.stdout.write(
-    `Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  doctor\n  install minimal [--yes] [--force]\n  start <issue-id>\n  pause <issue-id> --reason <text>\n  resume <issue-id>\n  cancel <issue-id> --reason <text>\n  test <issue-id> --name <gate> -- <command...>\n  review <issue-id>\n  complete <issue-id>\n`,
+    `Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  doctor\n  install minimal [--yes] [--force]\n  install recommended [--yes] [--force]\n  start <issue-id>\n  pause <issue-id> --reason <text>\n  resume <issue-id>\n  cancel <issue-id> --reason <text>\n  test <issue-id> --name <gate> -- <command...>\n  review <issue-id>\n  complete <issue-id>\n`,
   );
 }
 

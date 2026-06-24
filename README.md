@@ -96,6 +96,20 @@ slopflow install minimal --yes
 
 `install minimal` only writes project-local Slopflow files such as `.slopflow/config.json` and `.slopflow/work/`. It does not mutate global agent configuration, install packages globally, push, publish, create PRs, close issues, or merge changes. Existing incompatible config blocks unless rerun with explicit `--force`.
 
+Preview recommended project-local setup without writing files:
+
+```bash
+slopflow install recommended
+```
+
+Apply recommended project-local setup after reviewing the plan:
+
+```bash
+slopflow install recommended --yes
+```
+
+`install recommended` applies the minimal Slopflow setup and writes a project-local `.pi/slopflow-packages.json` manifest with suggested skill installation commands. It does not run those commands automatically and does not mutate global Claude, Pi, Cursor, or other agent harness configuration.
+
 Inspect current Slopflow state:
 
 ```bash

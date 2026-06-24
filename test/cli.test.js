@@ -228,6 +228,41 @@ test("install minimal blocks incompatible existing config unless forced", requir
   assert.equal(JSON.parse(readFileSync(configPath, "utf8")).artifact_root, ".slopflow/work");
 }));
 
+test("install recommended dry-run prints concrete project-local plan", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env, "install", "recommended");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /install:/);
+  assert.match(result.stdout, /status: planned/);
+  assert.match(result.stdout, /profile: recommended/);
+  assert.match(result.stdout, /mode: dry-run/);
+  assert.match(result.stdout, /manifest: \.pi\/slopflow-packages\.json/);
+  assert.match(result.stdout, /manifest-action: create/);
+  assert.match(result.stdout, /suggested-command: npx skills add aivv73\/slopflow --skill slopflow-live/);
+  assert.match(result.stdout, /writes: none/);
+  assert.equal(existsSync(join(repo, ".slopflow", "config.json")), false);
+  assert.equal(existsSync(join(repo, ".pi", "slopflow-packages.json")), false);
+}));
+
+test("install recommended --yes writes only project-local setup and manifest", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env, "install", "recommended", "--yes");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /status: applied/);
+  assert.match(result.stdout, /profile: recommended/);
+  assert.match(result.stdout, /writes: project-local/);
+  assert.equal(existsSync(join(repo, ".slopflow", "config.json")), true);
+  assert.equal(existsSync(join(repo, ".slopflow", "work")), true);
+  const manifest = JSON.parse(readFileSync(join(repo, ".pi", "slopflow-packages.json"), "utf8"));
+  assert.equal(manifest.profile, "recommended");
+  assert.equal(manifest.project_local_only, true);
+  assert.deepEqual(manifest.suggested_commands, [
+    "npx skills add aivv73/slopflow --skill setup-slopflow-skills-live",
+    "npx skills add aivv73/slopflow --skill slopflow-live",
+    "npx skills add aivv73/slopflow --skill slopflow",
+  ]);
+}));
+
 test("status reports config, jj change, active work count, and next step", requiresJj, withRepo((repo, env) => {
   assert.equal(slopflow(repo, env, "init").status, 0);
   mkdirSync(join(repo, ".slopflow", "work", "1"), { recursive: true });
