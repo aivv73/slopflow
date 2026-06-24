@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -114,6 +114,9 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     }
     if (command === "install") {
       return installCommand(args);
+    }
+    if (command === "skill") {
+      return skillCommand(args);
     }
     if (command === "start") {
       return startCommand(args[0]);
@@ -390,6 +393,99 @@ function buildRecommendedInstallManifest(): Record<string, unknown> {
       "Review agent harness documentation before installing global or user-level integrations.",
     ],
   };
+}
+
+type LintCheck = {
+  name: string;
+  status: "passed" | "failed";
+  detail: string;
+};
+
+function skillCommand(args: string[]): number {
+  const [subcommand] = args;
+  if (subcommand !== "lint") {
+    throw new SlopflowError("Unsupported skill command.", "Run `slopflow skill lint`.", 2);
+  }
+  const root = findRepoRoot(process.cwd()) ?? process.cwd();
+  const skillsDir = join(root, "skills");
+  const checks = lintSkills(skillsDir);
+  const failedCount = checks.filter((check) => check.status === "failed").length;
+  printBlock("skill-lint", {
+    status: failedCount > 0 ? "failed" : "passed",
+    "skills-dir": relativeToCwd(skillsDir),
+    "failed-count": failedCount,
+    "check-count": checks.length,
+    "next-step": failedCount > 0 ? "fix failing skill checks" : "no skill lint action required",
+  });
+  printBlock(`checks[${checks.length}]`, Object.fromEntries(checks.map((check) => [check.name, `${check.status} ${check.detail}`])));
+  return failedCount > 0 ? 2 : 0;
+}
+
+function lintSkills(skillsDir: string): LintCheck[] {
+  const checks: LintCheck[] = [];
+  const portablePath = join(skillsDir, "slopflow", "SKILL.md");
+  const livePath = join(skillsDir, "slopflow-live", "SKILL.md");
+  const portable = readOptionalText(portablePath);
+  const live = readOptionalText(livePath);
+
+  checks.push({ name: "slopflow.exists", status: portable ? "passed" : "failed", detail: portable ? "skills/slopflow/SKILL.md" : "missing skills/slopflow/SKILL.md" });
+  if (portable) {
+    checks.push({ name: "slopflow.no-interpolation", status: /!`/.test(portable) ? "failed" : "passed", detail: /!`/.test(portable) ? "portable skill contains shell interpolation" : "no shell interpolation" });
+    checks.push(skillTextCheck("slopflow.canonical", portable, /artifacts are canonical/i, "states CLI/artifacts are canonical"));
+    checks.push(skillTextCheck("slopflow.no-fabrication", portable, /Do not manually fabricate/i, "forbids fabricated artifacts"));
+    checks.push(skillTextCheck("slopflow.no-push-without-request", portable, /Do not push, merge, publish, create a pull request, or close an issue unless/i, "forbids push/merge/publish/PR/close unless requested"));
+  }
+
+  checks.push({ name: "slopflow-live.exists", status: live ? "passed" : "failed", detail: live ? "skills/slopflow-live/SKILL.md" : "missing skills/slopflow-live/SKILL.md" });
+  if (live) {
+    checks.push({ name: "slopflow-live.read-only-interpolation", status: liveInterpolationIsReadOnly(live) ? "passed" : "failed", detail: liveInterpolationIsReadOnly(live) ? "interpolation commands look read-only" : "interpolation includes mutating command" });
+    checks.push(skillTextCheck("slopflow-live.canonical", live, /artifacts are canonical/i, "states CLI/artifacts are canonical"));
+    checks.push(skillTextCheck("slopflow-live.no-fabrication", live, /Do not manually fabricate/i, "forbids fabricated artifacts"));
+    checks.push(skillTextCheck("slopflow-live.no-push-without-request", live, /Do not push, merge, publish, create a pull request, or close an issue unless/i, "forbids push/merge/publish/PR/close unless requested"));
+  }
+
+  for (const template of setupTemplateFiles(skillsDir)) {
+    const relativePath = relative(skillsDir, template);
+    const content = readOptionalText(template) ?? "";
+    const ok = /^---\n[\s\S]+?\n---\n/.test(content) && /^type:\s*\S.+$/m.test(content.match(/^---\n([\s\S]+?)\n---\n/)?.[1] ?? "");
+    checks.push({ name: `setup-template.${relativePath}`, status: ok ? "passed" : "failed", detail: ok ? "OKF frontmatter with type" : "missing OKF frontmatter type" });
+  }
+  return checks;
+}
+
+function skillTextCheck(name: string, content: string, pattern: RegExp, passedDetail: string): LintCheck {
+  return { name, status: pattern.test(content) ? "passed" : "failed", detail: pattern.test(content) ? passedDetail : `missing ${passedDetail}` };
+}
+
+function liveInterpolationIsReadOnly(content: string): boolean {
+  const commands = [...content.matchAll(/!`([^`]+)`/g)].map((match) => match[1] ?? "");
+  return commands.every((command) => !/\b(slopflow\s+(init|start|test|review|complete|pause|resume|cancel)|jj\s+(new|desc|rebase|git\s+push)|gh\s+(issue|pr)\s+(create|edit|close|comment)|rm\s+-|write|curl\s+-X\s*(POST|PUT|PATCH|DELETE))\b/i.test(command));
+}
+
+function setupTemplateFiles(skillsDir: string): string[] {
+  const result: string[] = [];
+  for (const setupName of ["setup-slopflow-skills", "setup-slopflow-skills-live"]) {
+    const dir = join(skillsDir, setupName);
+    if (!existsSync(dir)) continue;
+    for (const entry of readdirSyncSafe(dir)) {
+      const path = join(dir, entry);
+      if (entry === "SKILL.md" || !entry.endsWith(".md") || !statSync(path).isFile()) continue;
+      result.push(path);
+    }
+  }
+  return result.sort();
+}
+
+function readOptionalText(path: string): string | null {
+  return existsSync(path) ? readFileSync(path, "utf8") : null;
+}
+
+function readdirSyncSafe(path: string): string[] {
+  try {
+    return existsSync(path) ? readdirSync(path) : [];
+  } catch {
+    return [];
+  }
 }
 
 function readPackageNodeEngine(root: string): string | null {

@@ -129,6 +129,14 @@ slopflow install recommended --yes
 
 `install recommended` applies the minimal Slopflow setup and writes a project-local `.pi/slopflow-packages.json` manifest with suggested skill installation commands. It does not run those commands automatically and does not mutate global Claude, Pi, Cursor, or other agent harness configuration.
 
+Validate repository-distributed Slopflow skills without modifying files:
+
+```bash
+slopflow skill lint
+```
+
+`skill lint` checks that portable skills avoid shell interpolation, live skills use read-only interpolation, Slopflow safety rules are present, and setup templates include OKF frontmatter where applicable.
+
 Inspect current Slopflow state:
 
 ```bash

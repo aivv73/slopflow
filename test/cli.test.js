@@ -110,6 +110,21 @@ function writeProjectDocs(repo) {
   writeFileSync(join(repo, "CONTEXT.md"), "# Context\n", "utf8");
 }
 
+function writeSkillFixtures(repo, { failing = false } = {}) {
+  mkdirSync(join(repo, "skills", "slopflow"), { recursive: true });
+  mkdirSync(join(repo, "skills", "slopflow-live"), { recursive: true });
+  mkdirSync(join(repo, "skills", "setup-slopflow-skills"), { recursive: true });
+  writeFileSync(join(repo, "skills", "slopflow", "SKILL.md"), failing
+    ? "# Slopflow\n\n!`slopflow status`\n"
+    : "# Slopflow\n\nThe Slopflow CLI output and `.slopflow/work/<issue-id>/` artifacts are canonical.\n\nDo not manually fabricate test evidence, review verdicts, completion notes, or status metadata.\n\nDo not push, merge, publish, create a pull request, or close an issue unless explicitly requested.\n", "utf8");
+  writeFileSync(join(repo, "skills", "slopflow-live", "SKILL.md"), failing
+    ? "# Slopflow Live\n\n- status: !`slopflow start 1`\n"
+    : "# Slopflow Live\n\n- status: !`slopflow status 2>&1 || true`\n\nThe Slopflow CLI output and `.slopflow/work/<issue-id>/` artifacts are canonical.\n\nDo not manually fabricate test evidence, review verdicts, completion notes, or status metadata.\n\nDo not push, merge, publish, create a pull request, or close an issue unless explicitly requested.\n", "utf8");
+  writeFileSync(join(repo, "skills", "setup-slopflow-skills", "domain.md"), failing
+    ? "# Domain\n"
+    : "---\ntype: Agent Configuration\n---\n# Domain\n", "utf8");
+}
+
 test("init creates machine config and work root", requiresJj, withRepo((repo, env) => {
   const result = slopflow(repo, env, "init");
 
@@ -267,6 +282,34 @@ test("install recommended --yes writes only project-local setup and manifest", r
     "npx skills add aivv73/slopflow --skill slopflow-live",
     "npx skills add aivv73/slopflow --skill slopflow",
   ]);
+}));
+
+test("skill lint passes valid Slopflow skill fixtures", requiresJj, withRepo((repo, env) => {
+  writeSkillFixtures(repo);
+
+  const result = slopflow(repo, env, "skill", "lint");
+
+  assert.equal(result.status, 0, result.stdout);
+  assert.match(result.stdout, /skill-lint:/);
+  assert.match(result.stdout, /status: passed/);
+  assert.match(result.stdout, /failed-count: 0/);
+  assert.match(result.stdout, /slopflow.no-interpolation: passed/);
+  assert.match(result.stdout, /slopflow-live.read-only-interpolation: passed/);
+  assert.match(result.stdout, /setup-template.setup-slopflow-skills\/domain.md: passed/);
+}));
+
+test("skill lint fails unsafe synthetic skill fixtures", requiresJj, withRepo((repo, env) => {
+  writeSkillFixtures(repo, { failing: true });
+
+  const result = slopflow(repo, env, "skill", "lint");
+
+  assert.equal(result.status, 2);
+  assert.match(result.stdout, /skill-lint:/);
+  assert.match(result.stdout, /status: failed/);
+  assert.match(result.stdout, /slopflow.no-interpolation: failed portable skill contains shell interpolation/);
+  assert.match(result.stdout, /slopflow-live.read-only-interpolation: failed interpolation includes mutating command/);
+  assert.match(result.stdout, /setup-template.setup-slopflow-skills\/domain.md: failed missing OKF frontmatter type/);
+  assert.match(result.stdout, /next-step: fix failing skill checks/);
 }));
 
 test("status reports config, jj change, active work count, and next step", requiresJj, withRepo((repo, env) => {
