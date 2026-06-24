@@ -1,31 +1,295 @@
 # Slopflow
 
-Turn AI slop into scoped, tested, reviewed, reversible changes.
+A project-local outer loop for accountable AI coding work.
 
-Slopflow is a local CLI-runbook for controlled issue execution by AI coding agents.
+Coding agents already have an inner loop: read files, call tools, edit code, run tests, and eventually say “done.” Slopflow provides the outer loop around that agent loop: setup, issue contracts, test evidence, review packets, and completion gates that decide whether “done” actually means done.
 
-The first vertical slice provides:
+It is inspired by the harness-level loop pattern described in Armin Ronacher’s [The Coming Loop](https://lucumr.pocoo.org/2026/6/23/the-coming-loop/): work is attempted by machines, but a harness decides whether to continue, retry, hand off, or stop.
 
-```bash
-slopflow init
-slopflow install --harness pi
-slopflow status
-slopflow start <issue-id>
-slopflow pause <issue-id> --reason <text>
-slopflow resume <issue-id>
-slopflow cancel <issue-id> --reason <text>
-slopflow test <issue-id> --name <gate> -- <command...>
-slopflow review <issue-id>
-slopflow complete <issue-id>
+Slopflow’s bias is conservative: keep the loop bounded, legible, project-local, and reviewable.
+
+It turns AI slop into scoped, tested, reviewed, reversible changes.
+
+## Why Slopflow exists
+
+Coding agents are useful, but a model saying “done” is not a completion contract. Slopflow gives agents and humans a local runbook for issue execution:
+
+- initialize a repository workflow contract
+- install harness-specific skills, extensions, and agent roles
+- start work from a GitHub issue or pull request
+- record test evidence instead of merely claiming tests passed
+- prepare review packets
+- block local completion until evidence and review gates pass
+
+Slopflow is not an autonomous coding agent. It is the runbook around coding agents: setup, contracts, evidence, review, and completion.
+
+## Who this is for
+
+Slopflow is for people who use coding agents across repositories and want the workflow to be reproducible instead of reconstructed from memory every time.
+
+It is especially useful if you:
+
+- work from GitHub issues or PRs
+- want agents to record evidence instead of merely reporting success
+- use Pi, Claude Code, or Agent Skills-compatible tooling
+- prefer project-local configuration over global harness mutation
+- care about reviewable artifacts and explicit completion gates
+- want to experiment with harness-level loops without giving up human judgment
+
+It is probably not what you want if you are looking for a fully autonomous auto-merge bot.
+
+## Mental model
+
+Slopflow has three layers.
+
+### 1. Workflow pack
+
+`slopflow init` creates the minimal project-local Slopflow contract.
+
+`slopflow install --harness ...` installs a project-local workflow pack for the agent harness you actually use.
+
+### 2. Outer loop
+
+Slopflow controls issue execution outside the model’s inner tool loop:
+
+```text
+start -> test -> review -> complete
 ```
 
-## Usage
+The model can work, but Slopflow owns the lifecycle artifacts and gates.
+
+### 3. Adapters
+
+Slopflow connects the workflow to harnesses and tools:
+
+- Pi
+- Claude Code
+- generic Agent Skills-compatible tools
+- Jujutsu (`jj`)
+- GitHub
+- `pi-subagents`
+- `pi-codex-goal`
+
+## Quick start
 
 Slopflow requires Node.js 24 or newer.
 
-## CLI output contract
+Install the CLI:
 
-Slopflow's default command output is an agent-facing, TOON-like key-block format: a named block followed by compact `key: value` fields and a concrete `next-step` or `help[...]` hint when useful.
+```bash
+npm install -g slopflow
+```
+
+From the repository you want agents to work in:
+
+```bash
+slopflow init
+```
+
+The current issue workflow is optimized for Jujutsu (`jj`) and GitHub; `slopflow doctor` will report missing prerequisites and setup gaps.
+
+Install a workflow pack. Dry-run is the default:
+
+```bash
+slopflow install --harness pi
+```
+
+Apply after reviewing the plan:
+
+```bash
+slopflow install --harness pi --yes
+```
+
+Other supported harnesses:
+
+```bash
+slopflow install --harness claude-code --yes
+slopflow install --harness generic --yes
+```
+
+Check readiness:
+
+```bash
+slopflow doctor
+```
+
+Start controlled work for an issue:
+
+```bash
+slopflow start 42
+```
+
+Then follow the generated artifacts under:
+
+```text
+.slopflow/work/42/
+```
+
+## What Slopflow writes
+
+### `slopflow init`
+
+Creates the minimal Slopflow contract:
+
+```text
+.slopflow/config.json
+.slopflow/work/
+```
+
+Existing incompatible `.slopflow/config.json` blocks unless rerun with explicit `--force`.
+
+### `slopflow install --harness pi`
+
+Installs a project-local Pi workflow pack:
+
+```text
+.pi/settings.json
+.pi/skills/
+.pi/extensions/slopflow/index.ts
+.pi/agents/slopflow-planner.md
+.pi/agents/slopflow-executor.md
+.pi/agents/slopflow-reviewer.md
+```
+
+The Pi pack merges these project-local packages into `.pi/settings.json`:
+
+```text
+npm:@howaboua/pi-codex-conversion
+git:github.com/joelhooks/pi-skill-interpolation
+npm:@tintinweb/pi-subagents
+npm:pi-codex-goal
+```
+
+The local Slopflow Pi extension registers:
+
+```text
+/slopflow-status
+/slopflow-doctor
+/slopflow-create-goal <issue-id>
+```
+
+`/slopflow-create-goal <issue-id>` runs `slopflow start`, reads the generated `goal-prompt.md`, and pre-fills `pi-codex-goal`’s `/create-goal` prompt for user review.
+
+The installed Pi subagent roles are:
+
+- `slopflow-planner` — read-only planning agent with `skills: slopflow-live`
+- `slopflow-executor` — write-capable execution agent with `prompt_mode: append`
+- `slopflow-reviewer` — read-only review agent with `thinking: high`
+
+### `slopflow install --harness claude-code`
+
+Installs live Slopflow skills under:
+
+```text
+.claude/skills/
+```
+
+### `slopflow install --harness generic`
+
+Installs portable Agent Skills under:
+
+```text
+.agents/skills/
+```
+
+Use `generic` for Agent Skills-compatible environments where Slopflow should not assume Pi or Claude Code features.
+
+## Safety guarantees
+
+Slopflow does not:
+
+- install global packages
+- mutate global Claude, Pi, Cursor, or other harness configuration
+- push
+- publish
+- create pull requests
+- close issues
+- merge changes
+- fabricate evidence, review verdicts, completion notes, or status metadata
+
+`install` is dry-run by default. Use `--yes` to write project-local files. Existing differing harness pack files block unless rerun with explicit `--force`.
+
+Deprecated setup commands:
+
+- `slopflow install minimal` is replaced by `slopflow init`
+- `slopflow install recommended` is replaced by explicit harness workflow packs
+
+## The controlled work lifecycle
+
+### Inspect state
+
+```bash
+slopflow status
+```
+
+### Start issue work
+
+```bash
+slopflow start 42
+```
+
+`start` creates canonical bootstrap artifacts:
+
+```text
+.slopflow/work/42/issue.md
+.slopflow/work/42/contract.md
+.slopflow/work/42/status.json
+.slopflow/work/42/goal-prompt.md
+.slopflow/work/42/next-steps.md
+```
+
+It does not create placeholder evidence, review, or completion files.
+
+### Pause, resume, or cancel
+
+```bash
+slopflow pause 42 --reason "waiting for external review"
+slopflow resume 42
+slopflow cancel 42 --reason "superseded by another issue"
+```
+
+Lifecycle commands preserve the work directory and record local status only. They do not push, close issues, publish, delete evidence, or abandon VCS changes.
+
+### Record test evidence
+
+```bash
+slopflow test 42 --name unit -- npm test
+slopflow test 42 --name typecheck -- npm run build
+```
+
+`test` writes structured evidence and raw logs under:
+
+```text
+.slopflow/work/42/evidence/
+```
+
+Then it returns the wrapped command’s exit code.
+
+### Prepare review
+
+```bash
+slopflow review 42
+```
+
+`review` writes:
+
+```text
+.slopflow/work/42/review-packet.md
+```
+
+It does not self-approve and does not create `review.json`. A separate human or agent reviewer must write the verdict.
+
+### Complete locally
+
+```bash
+slopflow complete 42
+```
+
+`complete` checks evidence and reviewer gates, generates `completion-note.md` when missing, preserves an existing note, updates local `status.json`, and never publishes, pushes, merges, opens PRs, or closes issues.
+
+## Output contract
+
+Slopflow’s default output is an agent-facing, TOON-like key-block format: a named block followed by compact `key: value` fields and a concrete `next-step` or `help[...]` hint when useful.
 
 Example success output:
 
@@ -48,9 +312,9 @@ error:
   hint: <optional next action>
 ```
 
-Canonical Slopflow status, gate, and error output is written to stdout so agents can parse a single structured stream. Stderr is reserved for debug output and wrapped-command logs; `slopflow test` captures wrapped command stdout/stderr in evidence logs under `.slopflow/work/<issue-id>/evidence/logs/`.
+Canonical Slopflow status, gate, and error output is written to stdout so agents can parse a single structured stream. Stderr is reserved for debug output and wrapped-command logs.
 
-Use `--json` only when scripts or integrations need machine JSON output. The default remains compact key-block output for agents. Initial JSON modes are:
+Use `--json` when scripts or integrations need machine JSON output:
 
 ```bash
 slopflow status --json
@@ -69,9 +333,9 @@ Errors with `--json` return structured JSON error objects:
 }
 ```
 
-### Doctor output and severity
+## Doctor and readiness
 
-`slopflow doctor` is a read-only setup diagnostic. It uses the same compact key-block format and reports a top-level status plus grouped severities:
+`slopflow doctor` is a read-only setup diagnostic. It reports a top-level status plus grouped severities:
 
 ```text
 doctor:
@@ -90,43 +354,22 @@ checks[...]:
 
 Severity rules:
 
-- `passed` — all core, project-doc, and recommended checks passed.
-- `warn` — core checks passed, but at least one project-doc or recommended check is missing, optional, or unchecked.
-- `failed` — at least one core readiness check failed; the command exits with code `2`.
+- `passed` — all core, project-doc, and recommended checks passed
+- `warn` — core checks passed, but at least one project-doc or recommended check is missing, optional, or unchecked
+- `failed` — at least one core readiness check failed; the command exits with code `2`
 
 Doctor detail strings are intentionally bounded and summarized so setup diagnostics stay agent-readable instead of dumping full command output.
 
-Initialize the project-local Slopflow contract in a Jujutsu-backed GitHub repo:
+## Skills
 
-```bash
-slopflow init
-```
+Slopflow distributes four skills:
 
-`init` writes only Slopflow core state: `.slopflow/config.json` and `.slopflow/work/`. Existing incompatible config blocks unless rerun with explicit `--force`.
+- `slopflow` — portable execution skill
+- `slopflow-live` — live-context execution skill with read-only shell interpolation
+- `setup-slopflow-skills` — portable setup skill
+- `setup-slopflow-skills-live` — live-context setup skill
 
-Install the Slopflow workflow pack for the agent harness used by this project. The command asks interactively when run in a TTY; scripts should pass `--harness` explicitly. Dry-run is the default:
-
-```bash
-slopflow install --harness pi
-slopflow install --harness claude-code
-slopflow install --harness generic
-```
-
-Apply after reviewing the plan:
-
-```bash
-slopflow install --harness pi --yes
-```
-
-Harness packs are project-local only:
-
-- `pi` writes `.pi/skills/`, `.pi/extensions/`, `.pi/agents/`, and merges `.pi/settings.json` with the recommended Pi package stack: `npm:@howaboua/pi-codex-conversion`, `git:github.com/joelhooks/pi-skill-interpolation`, `npm:@tintinweb/pi-subagents`, and `npm:pi-codex-goal`. The local Slopflow Pi extension registers `/slopflow-status`, `/slopflow-doctor`, and `/slopflow-create-goal <issue-id>`; the goal command runs `slopflow start`, reads the generated `goal-prompt.md`, and pre-fills pi-codex-goal's `/create-goal` prompt for user review.
-- `claude-code` writes live Slopflow skills under `.claude/skills/`.
-- `generic` writes portable Agent Skills under `.agents/skills/`.
-
-`install` does not mutate global Claude, Pi, Cursor, or other agent harness configuration; it does not install global packages, push, publish, create PRs, close issues, or merge changes. Existing differing harness pack files block unless rerun with explicit `--force`. `slopflow install minimal` is replaced by `slopflow init`; `slopflow install recommended` is replaced by explicit harness workflow packs.
-
-Validate repository-distributed Slopflow skills without modifying files:
+Harness workflow packs install the appropriate variants locally. You can also validate repository-distributed skill files without modifying anything:
 
 ```bash
 slopflow skill lint
@@ -134,132 +377,36 @@ slopflow skill lint
 
 `skill lint` checks that portable skills avoid shell interpolation, live skills use read-only interpolation, Slopflow safety rules are present, and setup templates include OKF frontmatter where applicable.
 
-Inspect current Slopflow state:
+## Conventions and influences
 
-```bash
-slopflow status
-```
+Slopflow follows a few explicit conventions so humans and agents can share context without guessing.
 
-Bootstrap controlled work for an existing issue:
+- [AXI](https://axi.md/) shapes the command output style: compact, structured, contextual, bounded, and easy for agents to parse.
+- [Open Knowledge Format (OKF)](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) shapes repository knowledge files and indexes, especially `docs/agents/*.md`, `docs/adr/`, and `CONTEXT.md`.
+- [Matt Pocock’s engineering skills](https://github.com/mattpocock/skills/tree/main) influenced the setup-skill approach: encode team workflow, issue-tracker conventions, triage labels, and domain-documentation layout as reusable agent skills.
 
-```bash
-slopflow start 2
-```
+These conventions are not decoration. They are part of the outer loop: agents need stable local knowledge, structured output, and explicit artifacts to do useful work without inventing process on every task.
 
-`start` creates real bootstrap artifacts under `.slopflow/work/<issue-id>/`:
+## Command reference
 
 ```text
-issue.md
-contract.md
-status.json
-goal-prompt.md
-next-steps.md
-```
-
-It does not create placeholder evidence, review, or completion files.
-
-Pause, resume, or cancel local issue work without running gates or mutating Jujutsu history:
-
-```bash
-slopflow pause 2 --reason "waiting for external review"
-slopflow resume 2
-slopflow cancel 2 --reason "superseded by another issue"
-```
-
-Lifecycle commands preserve the work directory and record local status only. They do not push, close issues, publish, delete evidence, or abandon Jujutsu changes.
-
-Capture command-based quality evidence for started issue work:
-
-```bash
-slopflow test 2 --name unit -- npm test
-slopflow test 2 --name typecheck -- npm run build
-```
-
-`test` writes structured evidence and raw logs under `.slopflow/work/<issue-id>/evidence/`, then returns the wrapped command's exit code.
-
-Prepare a review packet and validate reviewer verdict state:
-
-```bash
-slopflow review 2
-```
-
-`review` writes `.slopflow/work/<issue-id>/review-packet.md` but never creates `review.json`. A separate human or agent reviewer must write the verdict.
-
-Mark issue work locally complete after evidence and reviewer gates pass:
-
-```bash
-slopflow complete 2
-```
-
-`complete` generates `completion-note.md` when missing, preserves an existing note, updates local `status.json`, and never publishes, pushes, merges, opens PRs, or closes issues.
-
-## Agent skills
-
-For a new project, install and run the setup skill before the Slopflow execution skill. It records the repository's issue tracker, triage labels, and domain-documentation layout so later engineering skills have the local context they expect:
-
-```bash
-npx skills add aivv73/slopflow --skill setup-slopflow-skills
-```
-
-If your agent runtime supports Claude-compatible skill interpolation, use the live setup variant instead:
-
-```bash
-npx skills add aivv73/slopflow --skill setup-slopflow-skills-live
-```
-
-The setup skills create OKF-compatible `docs/agents/*.md` concept documents and update the repo's `AGENTS.md` or `CLAUDE.md` instructions. They are adapted from Matt Pocock's engineering skills (https://github.com/mattpocock/skills/) for Slopflow onboarding. Run one of them first in a newly onboarded project, then initialize Slopflow and use the execution skill.
-
-Install the portable Slopflow skill:
-
-```bash
-npx skills add aivv73/slopflow --skill slopflow
-```
-
-Install the live-context Slopflow skill for Claude Code or Pi with `pi-skill-interpolation`:
-
-```bash
-npx skills add aivv73/slopflow --skill slopflow-live
-```
-
-The portable skills do not execute shell commands during rendering. The live skills use Claude-compatible read-only shell interpolation to inject setup or Slopflow context.
-
-Agent skills are installed separately through Vercel Skills. The Slopflow npm package distributes the CLI and does not install skills into Claude, Pi, Cursor, or other agent harness directories.
-
-## Install
-
-Slopflow is published on npm: https://www.npmjs.com/package/slopflow
-
-Install the CLI globally:
-
-```bash
-npm install -g slopflow
-```
-
-Then run:
-
-```bash
-slopflow --help
-slopflow status
-```
-
-For local development from a clone:
-
-```bash
-npm install
-npm run build
-npm link
-slopflow status
-```
-
-To remove the local link later:
-
-```bash
-npm unlink -g slopflow
+slopflow init [--force]
+slopflow status [--json]
+slopflow doctor [--json]
+slopflow install --harness pi|claude-code|generic [--yes] [--force]
+slopflow skill lint
+slopflow start <issue-id>
+slopflow pause <issue-id> --reason <text>
+slopflow resume <issue-id>
+slopflow cancel <issue-id> --reason <text>
+slopflow test <issue-id> --name <gate> -- <command...>
+slopflow review <issue-id>
+slopflow complete <issue-id>
 ```
 
 ## Development
 
-Slopflow uses TypeScript and npm for the CLI implementation. Use Node.js 24 or newer.
+Slopflow uses TypeScript and npm for the CLI implementation.
 
 Install dependencies:
 
@@ -297,12 +444,9 @@ Run full local CI, matching the GitHub Actions workflow:
 npm run ci
 ```
 
-GitHub Actions runs the same `npm run ci` package checks on pushes to `main` and pull requests.
-
 Check release readiness without publishing:
 
 ```bash
 npm run release:check
 ```
 
-See [docs/release.md](docs/release.md) for the manual npm release checklist.
