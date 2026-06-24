@@ -16,6 +16,7 @@ function makeRepo() {
   mkdirSync(repo);
   run(["git", "init", "-q"], repo, true);
   run(["git", "remote", "add", "origin", "https://github.com/aivv73/slopflow.git"], repo, true);
+  writeFileSync(join(repo, "package.json"), JSON.stringify({ engines: { node: ">=24" } }), "utf8");
   run(["jj", "git", "init", "--colocate"], repo, true);
   const bin = join(dir, "bin");
   mkdirSync(bin);
@@ -24,6 +25,10 @@ function makeRepo() {
     ghPath,
     `#!/usr/bin/env node
 const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  console.log("gh version 0.0.0-test");
+  process.exit(0);
+}
 const kind = args[0];
 const number = Number(args[2]);
 if (kind === "issue" && args[1] === "view" && number === 2) {
@@ -49,6 +54,9 @@ process.exit(1);
 `,
   );
   chmodSync(ghPath, 0o755);
+  const ghAxiPath = join(bin, "gh-axi");
+  writeFileSync(ghAxiPath, "#!/bin/sh\necho 'gh-axi 0.0.0-test'\n", "utf8");
+  chmodSync(ghAxiPath, 0o755);
   return { dir, repo, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } };
 }
 
@@ -62,6 +70,12 @@ function run(args, cwd, check = false, env = process.env) {
 
 function slopflow(repo, env, ...args) {
   return run([process.execPath, cliPath, ...args], repo, false, env);
+}
+
+function parseJsonOutput(result) {
+  assert.equal(result.stderr, "");
+  assert.doesNotThrow(() => JSON.parse(result.stdout), result.stdout);
+  return JSON.parse(result.stdout);
 }
 
 function withRepo(fn) {
@@ -85,6 +99,30 @@ function writeReview(repo, issueId, overrides = {}) {
     required_changes: [],
     ...overrides,
   }), "utf8");
+}
+
+function writeProjectDocs(repo) {
+  mkdirSync(join(repo, "docs", "agents"), { recursive: true });
+  mkdirSync(join(repo, "docs", "adr"), { recursive: true });
+  writeFileSync(join(repo, "docs", "agents", "issue-tracker.md"), "---\ntype: Agent Configuration\n---\n# Issue tracker\n", "utf8");
+  writeFileSync(join(repo, "docs", "agents", "triage-labels.md"), "---\ntype: Agent Configuration\n---\n# Triage labels\n", "utf8");
+  writeFileSync(join(repo, "docs", "agents", "domain.md"), "---\ntype: Agent Configuration\n---\n# Domain\n", "utf8");
+  writeFileSync(join(repo, "CONTEXT.md"), "# Context\n", "utf8");
+}
+
+function writeSkillFixtures(repo, { failing = false } = {}) {
+  mkdirSync(join(repo, "skills", "slopflow"), { recursive: true });
+  mkdirSync(join(repo, "skills", "slopflow-live"), { recursive: true });
+  mkdirSync(join(repo, "skills", "setup-slopflow-skills"), { recursive: true });
+  writeFileSync(join(repo, "skills", "slopflow", "SKILL.md"), failing
+    ? "# Slopflow\n\n!`slopflow status`\n"
+    : "# Slopflow\n\nThe Slopflow CLI output and `.slopflow/work/<issue-id>/` artifacts are canonical.\n\nDo not manually fabricate test evidence, review verdicts, completion notes, or status metadata.\n\nDo not push, merge, publish, create a pull request, or close an issue unless explicitly requested.\n", "utf8");
+  writeFileSync(join(repo, "skills", "slopflow-live", "SKILL.md"), failing
+    ? "# Slopflow Live\n\n- status: !`slopflow start 1`\n"
+    : "# Slopflow Live\n\n- status: !`slopflow status 2>&1 || true`\n\nThe Slopflow CLI output and `.slopflow/work/<issue-id>/` artifacts are canonical.\n\nDo not manually fabricate test evidence, review verdicts, completion notes, or status metadata.\n\nDo not push, merge, publish, create a pull request, or close an issue unless explicitly requested.\n", "utf8");
+  writeFileSync(join(repo, "skills", "setup-slopflow-skills", "domain.md"), failing
+    ? "# Domain\n"
+    : "---\ntype: Agent Configuration\n---\n# Domain\n", "utf8");
 }
 
 test("init creates machine config and work root", requiresJj, withRepo((repo, env) => {
@@ -153,6 +191,127 @@ test("init detects repo root from subdirectory", requiresJj, withRepo((repo, env
   assert.doesNotThrow(() => readFileSync(join(repo, ".slopflow", "config.json")));
 }));
 
+test("install minimal dry-run prints plan without writing", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env, "install", "minimal");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /install:/);
+  assert.match(result.stdout, /status: planned/);
+  assert.match(result.stdout, /profile: minimal/);
+  assert.match(result.stdout, /mode: dry-run/);
+  assert.match(result.stdout, /config-action: create/);
+  assert.match(result.stdout, /work-root-action: create/);
+  assert.match(result.stdout, /writes: none/);
+  assert.match(result.stdout, /next-step: slopflow install minimal --yes/);
+  assert.equal(existsSync(join(repo, ".slopflow", "config.json")), false);
+  assert.equal(existsSync(join(repo, ".slopflow", "work")), false);
+}));
+
+test("install minimal --yes applies project-local setup", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env, "install", "minimal", "--yes");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /status: applied/);
+  assert.match(result.stdout, /mode: apply/);
+  assert.match(result.stdout, /writes: project-local/);
+  assert.match(result.stdout, /next-step: slopflow doctor/);
+  assert.equal(existsSync(join(repo, ".slopflow", "config.json")), true);
+  assert.equal(existsSync(join(repo, ".slopflow", "work")), true);
+}));
+
+test("install minimal --yes is idempotent for compatible setup", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "install", "minimal", "--yes").status, 0);
+
+  const second = slopflow(repo, env, "install", "minimal", "--yes");
+
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /status: unchanged/);
+  assert.match(second.stdout, /config-action: preserve/);
+  assert.match(second.stdout, /work-root-action: preserve/);
+}));
+
+test("install minimal blocks incompatible existing config unless forced", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "install", "minimal", "--yes").status, 0);
+  const configPath = join(repo, ".slopflow", "config.json");
+  const config = JSON.parse(readFileSync(configPath, "utf8"));
+  config.artifact_root = ".elsewhere/work";
+  writeFileSync(configPath, JSON.stringify(config), "utf8");
+
+  const blocked = slopflow(repo, env, "install", "minimal", "--yes");
+  assert.equal(blocked.status, 2);
+  assert.match(blocked.stdout, /status: blocked/);
+  assert.match(blocked.stdout, /differs from detected config/);
+  assert.match(blocked.stdout, /slopflow install minimal --yes --force/);
+
+  const forced = slopflow(repo, env, "install", "minimal", "--yes", "--force");
+  assert.equal(forced.status, 0, forced.stdout);
+  assert.match(forced.stdout, /config-action: refresh/);
+  assert.equal(JSON.parse(readFileSync(configPath, "utf8")).artifact_root, ".slopflow/work");
+}));
+
+test("install recommended dry-run prints concrete project-local plan", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env, "install", "recommended");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /install:/);
+  assert.match(result.stdout, /status: planned/);
+  assert.match(result.stdout, /profile: recommended/);
+  assert.match(result.stdout, /mode: dry-run/);
+  assert.match(result.stdout, /manifest: \.pi\/slopflow-packages\.json/);
+  assert.match(result.stdout, /manifest-action: create/);
+  assert.match(result.stdout, /suggested-command: npx skills add aivv73\/slopflow --skill slopflow-live/);
+  assert.match(result.stdout, /writes: none/);
+  assert.equal(existsSync(join(repo, ".slopflow", "config.json")), false);
+  assert.equal(existsSync(join(repo, ".pi", "slopflow-packages.json")), false);
+}));
+
+test("install recommended --yes writes only project-local setup and manifest", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env, "install", "recommended", "--yes");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /status: applied/);
+  assert.match(result.stdout, /profile: recommended/);
+  assert.match(result.stdout, /writes: project-local/);
+  assert.equal(existsSync(join(repo, ".slopflow", "config.json")), true);
+  assert.equal(existsSync(join(repo, ".slopflow", "work")), true);
+  const manifest = JSON.parse(readFileSync(join(repo, ".pi", "slopflow-packages.json"), "utf8"));
+  assert.equal(manifest.profile, "recommended");
+  assert.equal(manifest.project_local_only, true);
+  assert.deepEqual(manifest.suggested_commands, [
+    "npx skills add aivv73/slopflow --skill setup-slopflow-skills-live",
+    "npx skills add aivv73/slopflow --skill slopflow-live",
+    "npx skills add aivv73/slopflow --skill slopflow",
+  ]);
+}));
+
+test("skill lint passes valid Slopflow skill fixtures", requiresJj, withRepo((repo, env) => {
+  writeSkillFixtures(repo);
+
+  const result = slopflow(repo, env, "skill", "lint");
+
+  assert.equal(result.status, 0, result.stdout);
+  assert.match(result.stdout, /skill-lint:/);
+  assert.match(result.stdout, /status: passed/);
+  assert.match(result.stdout, /failed-count: 0/);
+  assert.match(result.stdout, /slopflow.no-interpolation: passed/);
+  assert.match(result.stdout, /slopflow-live.read-only-interpolation: passed/);
+  assert.match(result.stdout, /setup-template.setup-slopflow-skills\/domain.md: passed/);
+}));
+
+test("skill lint fails unsafe synthetic skill fixtures", requiresJj, withRepo((repo, env) => {
+  writeSkillFixtures(repo, { failing: true });
+
+  const result = slopflow(repo, env, "skill", "lint");
+
+  assert.equal(result.status, 2);
+  assert.match(result.stdout, /skill-lint:/);
+  assert.match(result.stdout, /status: failed/);
+  assert.match(result.stdout, /slopflow.no-interpolation: failed portable skill contains shell interpolation/);
+  assert.match(result.stdout, /slopflow-live.read-only-interpolation: failed interpolation includes mutating command/);
+  assert.match(result.stdout, /setup-template.setup-slopflow-skills\/domain.md: failed missing OKF frontmatter type/);
+  assert.match(result.stdout, /next-step: fix failing skill checks/);
+}));
+
 test("status reports config, jj change, active work count, and next step", requiresJj, withRepo((repo, env) => {
   assert.equal(slopflow(repo, env, "init").status, 0);
   mkdirSync(join(repo, ".slopflow", "work", "1"), { recursive: true });
@@ -170,11 +329,108 @@ test("status reports config, jj change, active work count, and next step", requi
   assert.match(result.stdout, /next-step: slopflow start <issue-id>/);
 }));
 
+test("status --json returns valid JSON with status fields", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  mkdirSync(join(repo, ".slopflow", "work", "1"), { recursive: true });
+
+  const result = slopflow(repo, env, "status", "--json");
+  const payload = parseJsonOutput(result);
+
+  assert.equal(result.status, 0);
+  assert.equal(payload.status.state, "initialized");
+  assert.equal(payload.status.repo, "aivv73/slopflow");
+  assert.equal(payload.status.issue_tracker, "github");
+  assert.equal(payload.status.vcs, "jj");
+  assert.equal(payload.status["active-work-count"], 1);
+  assert.equal(payload.status["next-step"], "slopflow start <issue-id>");
+}));
+
 test("status blocks before init", requiresJj, withRepo((repo, env) => {
   const result = slopflow(repo, env, "status");
   assert.equal(result.status, 2);
   assert.match(result.stdout, /status: blocked/);
   assert.match(result.stdout, /Run `slopflow init` first/);
+}));
+
+test("status --json returns structured JSON errors", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env, "status", "--json");
+  const payload = parseJsonOutput(result);
+
+  assert.equal(result.status, 2);
+  assert.equal(payload.error.status, "blocked");
+  assert.equal(payload.error.message, "Slopflow machine config is missing.");
+  assert.equal(payload.error.hint, "Run `slopflow init` first.");
+}));
+
+test("doctor reports initialized repository readiness", requiresJj, withRepo((repo, env) => {
+  writeProjectDocs(repo);
+  assert.equal(slopflow(repo, env, "init").status, 0);
+
+  const result = slopflow(repo, env, "doctor");
+
+  assert.equal(result.status, 0, result.stdout);
+  assert.match(result.stdout, /doctor:/);
+  assert.match(result.stdout, /status: passed/);
+  assert.match(result.stdout, /core: passed/);
+  assert.match(result.stdout, /project-docs: passed/);
+  assert.match(result.stdout, /recommended: passed/);
+  assert.match(result.stdout, /failed-count: 0/);
+  assert.match(result.stdout, /warning-count: 0/);
+  assert.match(result.stdout, /next-step: slopflow start <issue-id>/);
+  assert.match(result.stdout, /checks\[/);
+  assert.match(result.stdout, /core.node: passed node v.* satisfies >=24/);
+  assert.match(result.stdout, /core.config: passed/);
+  assert.match(result.stdout, /recommended.gh: passed/);
+  assert.match(result.stdout, /recommended.gh-axi: passed gh-axi executable found/);
+}));
+
+test("doctor --json returns valid JSON with doctor fields and checks", requiresJj, withRepo((repo, env) => {
+  writeProjectDocs(repo);
+  assert.equal(slopflow(repo, env, "init").status, 0);
+
+  const result = slopflow(repo, env, "doctor", "--json");
+  const payload = parseJsonOutput(result);
+
+  assert.equal(result.status, 0);
+  assert.equal(payload.doctor.status, "passed");
+  assert.equal(payload.doctor.core, "passed");
+  assert.equal(payload.doctor["project-docs"], "passed");
+  assert.equal(payload.doctor.recommended, "passed");
+  assert.equal(payload.doctor["failed-count"], 0);
+  assert.equal(payload.doctor["warning-count"], 0);
+  assert.match(payload.checks["core.node"], /^passed node v/);
+  assert.equal(payload.checks["recommended.gh-axi"], "passed gh-axi executable found");
+}));
+
+test("doctor fails before initialization and suggests init", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env, "doctor");
+
+  assert.equal(result.status, 2);
+  assert.match(result.stdout, /doctor:/);
+  assert.match(result.stdout, /status: failed/);
+  assert.match(result.stdout, /core: failed/);
+  assert.match(result.stdout, /core.config: failed \.slopflow\/config\.json missing/);
+  assert.match(result.stdout, /core.work-root: failed \.slopflow\/work missing/);
+  assert.match(result.stdout, /next-step: slopflow init/);
+}));
+
+test("doctor warns when optional gh tool is missing", requiresJj, withRepo((repo, env) => {
+  writeProjectDocs(repo);
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  const bin = mkdtempSync(join(tmpdir(), "slopflow-doctor-bin-"));
+  const jjPath = join(bin, "jj");
+  writeFileSync(jjPath, "#!/bin/sh\necho 'jj 0.0.0-test'\n", "utf8");
+  chmodSync(jjPath, 0o755);
+
+  const result = slopflow(repo, { ...env, PATH: bin }, "doctor");
+
+  assert.equal(result.status, 0, result.stdout);
+  assert.match(result.stdout, /status: warn/);
+  assert.match(result.stdout, /core: passed/);
+  assert.match(result.stdout, /recommended: warn/);
+  assert.match(result.stdout, /recommended.gh: warn gh executable missing/);
+  assert.match(result.stdout, /recommended.gh-axi: warn unchecked/);
+  assert.match(result.stdout, /next-step: install gh or continue if GitHub start is not needed/);
 }));
 
 test("no-args home view reports uninitialized repository", requiresJj, withRepo((repo, env) => {

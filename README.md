@@ -49,11 +49,93 @@ error:
 
 Canonical Slopflow status, gate, and error output is written to stdout so agents can parse a single structured stream. Stderr is reserved for debug output and wrapped-command logs; `slopflow test` captures wrapped command stdout/stderr in evidence logs under `.slopflow/work/<issue-id>/evidence/logs/`.
 
+Use `--json` only when scripts or integrations need machine JSON output. The default remains compact key-block output for agents. Initial JSON modes are:
+
+```bash
+slopflow status --json
+slopflow doctor --json
+```
+
+Errors with `--json` return structured JSON error objects:
+
+```json
+{
+  "error": {
+    "status": "blocked",
+    "message": "Slopflow machine config is missing.",
+    "hint": "Run `slopflow init` first."
+  }
+}
+```
+
+### Doctor output and severity
+
+`slopflow doctor` is a read-only setup diagnostic. It uses the same compact key-block format and reports a top-level status plus grouped severities:
+
+```text
+doctor:
+  status: warn
+  core: passed
+  project-docs: passed
+  recommended: warn
+  failed-count: 0
+  warning-count: 1
+  next-step: run npx -y gh-axi --help when GitHub AXI operations are needed
+checks[...]:
+  core.node: passed node v26.1.0 satisfies >=24
+  core.jj: passed jj executable found
+  recommended.gh-axi: warn unchecked; run npx -y gh-axi --help when GitHub AXI operations are needed
+```
+
+Severity rules:
+
+- `passed` — all core, project-doc, and recommended checks passed.
+- `warn` — core checks passed, but at least one project-doc or recommended check is missing, optional, or unchecked.
+- `failed` — at least one core readiness check failed; the command exits with code `2`.
+
+Doctor detail strings are intentionally bounded and summarized so setup diagnostics stay agent-readable instead of dumping full command output.
+
 Initialize Slopflow machine config in a Jujutsu-backed GitHub repo:
 
 ```bash
 slopflow init
 ```
+
+Preview minimal project-local setup without writing files:
+
+```bash
+slopflow install minimal
+```
+
+Apply minimal project-local setup after reviewing the plan:
+
+```bash
+slopflow install minimal --yes
+```
+
+`install minimal` only writes project-local Slopflow files such as `.slopflow/config.json` and `.slopflow/work/`. It does not mutate global agent configuration, install packages globally, push, publish, create PRs, close issues, or merge changes. Existing incompatible config blocks unless rerun with explicit `--force`.
+
+Preview recommended project-local setup without writing files:
+
+```bash
+slopflow install recommended
+```
+
+Apply recommended project-local setup after reviewing the plan:
+
+```bash
+slopflow install recommended --yes
+```
+
+`install recommended` applies the minimal Slopflow setup and writes a project-local `.pi/slopflow-packages.json` manifest with suggested skill installation commands. It does not run those commands automatically and does not mutate global Claude, Pi, Cursor, or other agent harness configuration.
+
+Validate repository-distributed Slopflow skills without modifying files:
+
+```bash
+slopflow skill lint
+```
+
+`skill lint` checks that portable skills avoid shell interpolation, live skills use read-only interpolation, Slopflow safety rules are present, and setup templates include OKF frontmatter where applicable.
 
 Inspect current Slopflow state:
 

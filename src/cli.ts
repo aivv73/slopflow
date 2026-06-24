@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -93,6 +93,7 @@ class SlopflowError extends Error {
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<number> {
+  const wantsJson = argv.includes("--json");
   try {
     const [command, ...args] = argv;
     if (!command) {
@@ -106,7 +107,16 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       return initCommand({ force: args.includes("--force") });
     }
     if (command === "status") {
-      return await statusCommand();
+      return await statusCommand({ json: args.includes("--json") });
+    }
+    if (command === "doctor") {
+      return doctorCommand({ json: args.includes("--json") });
+    }
+    if (command === "install") {
+      return installCommand(args);
+    }
+    if (command === "skill") {
+      return skillCommand(args);
     }
     if (command === "start") {
       return startCommand(args[0]);
@@ -132,19 +142,368 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     throw new SlopflowError(`Unknown command: ${command}`, "Run `slopflow --help`.", 2);
   } catch (error) {
     if (error instanceof SlopflowError) {
-      printBlock(
-        "error",
-        {
-          status: "blocked",
-          message: error.message,
-          ...error.details,
-          ...(error.hint ? { hint: error.hint } : {}),
-        },
-      );
+      const payload = {
+        status: "blocked",
+        message: error.message,
+        ...error.details,
+        ...(error.hint ? { hint: error.hint } : {}),
+      };
+      if (wantsJson) printJson({ error: payload });
+      else printBlock("error", payload);
       return error.code;
     }
     throw error;
   }
+}
+
+type DoctorCheck = {
+  name: string;
+  status: "passed" | "warn" | "failed";
+  detail: string;
+};
+
+function doctorCommand({ json = false }: { json?: boolean } = {}): number {
+  const checks: DoctorCheck[] = [];
+  checks.push({ name: "core.slopflow", status: "passed", detail: "cli running" });
+
+  const root = findRepoRoot(process.cwd());
+  const nodeEngine = root ? readPackageNodeEngine(root) : null;
+  const nodeSatisfies = nodeEngine ? nodeVersionSatisfies(process.versions.node, nodeEngine) : true;
+  checks.push({
+    name: "core.node",
+    status: nodeSatisfies ? "passed" : "failed",
+    detail: nodeEngine ? `node v${process.versions.node} satisfies ${nodeEngine}` : `node v${process.versions.node}; package.json engines.node not found`,
+  });
+
+  const jjPresent = commandExists("jj");
+  checks.push({
+    name: "core.jj",
+    status: jjPresent ? "passed" : "failed",
+    detail: jjPresent ? "jj executable found" : "jj executable missing",
+  });
+
+  checks.push({
+    name: "core.repository",
+    status: root ? "passed" : "failed",
+    detail: root ? `root ${relativeToCwd(root)}` : "no .jj or .git repository root found",
+  });
+
+  const jjRepo = root ? existsSync(join(root, ".jj")) : false;
+  checks.push({
+    name: "core.jj-repo",
+    status: jjRepo ? "passed" : "failed",
+    detail: jjRepo ? ".jj present" : "Jujutsu repository not detected",
+  });
+
+  const configPath = root ? join(root, ".slopflow", "config.json") : "";
+  const configExists = Boolean(root && existsSync(configPath));
+  checks.push({
+    name: "core.config",
+    status: configExists ? "passed" : "failed",
+    detail: configExists ? relativeToCwd(configPath) : ".slopflow/config.json missing",
+  });
+
+  let artifactRoot = DEFAULT_ARTIFACT_ROOT;
+  if (root && configExists) {
+    try {
+      artifactRoot = readMachineConfig(root).artifact_root;
+    } catch {
+      artifactRoot = DEFAULT_ARTIFACT_ROOT;
+    }
+  }
+  const workRoot = root ? join(root, artifactRoot) : "";
+  const workRootExists = Boolean(root && existsSync(workRoot));
+  checks.push({
+    name: "core.work-root",
+    status: workRootExists ? "passed" : "failed",
+    detail: workRootExists ? relativeToCwd(workRoot) : `${artifactRoot} missing`,
+  });
+
+  for (const [name, path] of [
+    ["project-docs.issue-tracker", "docs/agents/issue-tracker.md"],
+    ["project-docs.triage-labels", "docs/agents/triage-labels.md"],
+    ["project-docs.domain", "docs/agents/domain.md"],
+    ["project-docs.context", "CONTEXT.md"],
+    ["project-docs.adr", "docs/adr"],
+  ] as const) {
+    const present = Boolean(root && existsSync(join(root, path)));
+    checks.push({ name, status: present ? "passed" : "warn", detail: present ? path : `${path} missing` });
+  }
+
+  const ghPresent = commandExists("gh");
+  checks.push({
+    name: "recommended.gh",
+    status: ghPresent ? "passed" : "warn",
+    detail: doctorDetail(ghPresent ? "gh executable found" : "gh executable missing; GitHub issue start may fail"),
+  });
+  const ghAxiPresent = commandExists("gh-axi");
+  checks.push({
+    name: "recommended.gh-axi",
+    status: ghAxiPresent ? "passed" : "warn",
+    detail: doctorDetail(ghAxiPresent ? "gh-axi executable found" : "unchecked; run npx -y gh-axi --help when GitHub AXI operations are needed"),
+  });
+
+  const failedCount = checks.filter((check) => check.status === "failed").length;
+  const warningCount = checks.filter((check) => check.status === "warn").length;
+  const status = failedCount > 0 ? "failed" : warningCount > 0 ? "warn" : "passed";
+  const coreStatus = checks.some((check) => check.name.startsWith("core.") && check.status === "failed") ? "failed" : "passed";
+  const projectDocsStatus = groupStatus(checks, "project-docs.");
+  const recommendedStatus = groupStatus(checks, "recommended.");
+
+  const doctor = {
+    status,
+    core: coreStatus,
+    "project-docs": projectDocsStatus,
+    recommended: recommendedStatus,
+    "failed-count": failedCount,
+    "warning-count": warningCount,
+    "next-step": nextStepForDoctor(status, checks),
+  };
+  const checksOutput = Object.fromEntries(checks.map((check) => [check.name, `${check.status} ${check.detail}`]));
+  if (json) {
+    printJson({ doctor, checks: checksOutput });
+  } else {
+    printBlock("doctor", doctor);
+    printBlock(`checks[${checks.length}]`, checksOutput);
+  }
+  return failedCount > 0 ? 2 : 0;
+}
+
+function groupStatus(checks: DoctorCheck[], prefix: string): "passed" | "warn" | "failed" {
+  const group = checks.filter((check) => check.name.startsWith(prefix));
+  if (group.some((check) => check.status === "failed")) return "failed";
+  if (group.some((check) => check.status === "warn")) return "warn";
+  return "passed";
+}
+
+function nextStepForDoctor(status: string, checks: DoctorCheck[]): string {
+  if (status === "passed") return "slopflow start <issue-id>";
+  const firstFailed = checks.find((check) => check.status === "failed");
+  if (firstFailed?.name === "core.config") return "slopflow init";
+  if (firstFailed?.name === "core.work-root") return "slopflow init";
+  if (firstFailed?.name === "core.jj") return "install jj";
+  if (firstFailed?.name === "core.repository" || firstFailed?.name === "core.jj-repo") return "run inside a Jujutsu repository";
+  const firstWarn = checks.find((check) => check.status === "warn");
+  if (firstWarn?.name === "recommended.gh") return "install gh or continue if GitHub start is not needed";
+  if (firstWarn?.name === "recommended.gh-axi") return "run npx -y gh-axi --help when GitHub AXI operations are needed";
+  return "inspect doctor checks";
+}
+
+function doctorDetail(value: string, limit = 160): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > limit ? `${normalized.slice(0, limit)}...` : normalized;
+}
+
+function installCommand(args: string[]): number {
+  const [profile, ...flags] = args;
+  if (profile !== "minimal" && profile !== "recommended") {
+    throw new SlopflowError("Unsupported install profile.", "Run `slopflow install minimal` or `slopflow install recommended`.", 2);
+  }
+  const yes = flags.includes("--yes");
+  const force = flags.includes("--force");
+  const repo = discoverRepoContext(process.cwd());
+  const configPath = join(repo.root, ".slopflow", "config.json");
+  const desired = desiredConfig(repo.githubRepo);
+  const workPath = join(repo.root, desired.artifact_root);
+  const configExists = existsSync(configPath);
+  const workExists = existsSync(workPath);
+  const manifestPath = join(repo.root, ".pi", "slopflow-packages.json");
+  const manifestExists = existsSync(manifestPath);
+
+  let configAction: "create" | "preserve" | "refresh" = configExists ? "preserve" : "create";
+  if (configExists) {
+    const existing = readJson(configPath);
+    if (stableStringify(existing) !== stableStringify(desired)) {
+      if (!force) {
+        throw new SlopflowError(
+          "Existing .slopflow/config.json differs from detected config.",
+          "Inspect it or rerun with `slopflow install minimal --yes --force` to refresh project-local config.",
+          2,
+        );
+      }
+      configAction = "refresh";
+    }
+  }
+  const workAction: "create" | "preserve" = workExists ? "preserve" : "create";
+  const manifestAction: "create" | "preserve" = manifestExists ? "preserve" : "create";
+
+  if (!yes) {
+    printBlock("install", {
+      status: "planned",
+      profile,
+      mode: "dry-run",
+      repo: repo.githubRepo,
+      config: relativeToCwd(configPath),
+      "config-action": configAction,
+      "work-root": desired.artifact_root,
+      "work-root-action": workAction,
+      ...(profile === "recommended" ? {
+        manifest: relativeToCwd(manifestPath),
+        "manifest-action": manifestAction,
+        "suggested-command": "npx skills add aivv73/slopflow --skill slopflow-live",
+      } : {}),
+      writes: "none",
+      "next-step": `slopflow install ${profile} --yes`,
+    });
+    return 0;
+  }
+
+  if (configAction !== "preserve") {
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeJson(configPath, desired);
+  }
+  mkdirSync(workPath, { recursive: true });
+  if (profile === "recommended" && manifestAction !== "preserve") {
+    mkdirSync(dirname(manifestPath), { recursive: true });
+    writeJson(manifestPath, buildRecommendedInstallManifest());
+  }
+  printBlock("install", {
+    status: configAction === "preserve" && workAction === "preserve" && (profile === "minimal" || manifestAction === "preserve") ? "unchanged" : "applied",
+    profile,
+    mode: "apply",
+    repo: repo.githubRepo,
+    config: relativeToCwd(configPath),
+    "config-action": configAction,
+    "work-root": desired.artifact_root,
+    "work-root-action": workAction,
+    ...(profile === "recommended" ? {
+      manifest: relativeToCwd(manifestPath),
+      "manifest-action": manifestAction,
+      "suggested-command": "npx skills add aivv73/slopflow --skill slopflow-live",
+    } : {}),
+    writes: "project-local",
+    "next-step": "slopflow doctor",
+  });
+  return 0;
+}
+
+function buildRecommendedInstallManifest(): Record<string, unknown> {
+  return {
+    schema_version: 1,
+    profile: "recommended",
+    generated_by: "slopflow install recommended",
+    project_local_only: true,
+    suggested_commands: [
+      "npx skills add aivv73/slopflow --skill setup-slopflow-skills-live",
+      "npx skills add aivv73/slopflow --skill slopflow-live",
+      "npx skills add aivv73/slopflow --skill slopflow",
+    ],
+    notes: [
+      "Slopflow does not run these commands automatically.",
+      "Review agent harness documentation before installing global or user-level integrations.",
+    ],
+  };
+}
+
+type LintCheck = {
+  name: string;
+  status: "passed" | "failed";
+  detail: string;
+};
+
+function skillCommand(args: string[]): number {
+  const [subcommand] = args;
+  if (subcommand !== "lint") {
+    throw new SlopflowError("Unsupported skill command.", "Run `slopflow skill lint`.", 2);
+  }
+  const root = findRepoRoot(process.cwd()) ?? process.cwd();
+  const skillsDir = join(root, "skills");
+  const checks = lintSkills(skillsDir);
+  const failedCount = checks.filter((check) => check.status === "failed").length;
+  printBlock("skill-lint", {
+    status: failedCount > 0 ? "failed" : "passed",
+    "skills-dir": relativeToCwd(skillsDir),
+    "failed-count": failedCount,
+    "check-count": checks.length,
+    "next-step": failedCount > 0 ? "fix failing skill checks" : "no skill lint action required",
+  });
+  printBlock(`checks[${checks.length}]`, Object.fromEntries(checks.map((check) => [check.name, `${check.status} ${check.detail}`])));
+  return failedCount > 0 ? 2 : 0;
+}
+
+function lintSkills(skillsDir: string): LintCheck[] {
+  const checks: LintCheck[] = [];
+  const portablePath = join(skillsDir, "slopflow", "SKILL.md");
+  const livePath = join(skillsDir, "slopflow-live", "SKILL.md");
+  const portable = readOptionalText(portablePath);
+  const live = readOptionalText(livePath);
+
+  checks.push({ name: "slopflow.exists", status: portable ? "passed" : "failed", detail: portable ? "skills/slopflow/SKILL.md" : "missing skills/slopflow/SKILL.md" });
+  if (portable) {
+    checks.push({ name: "slopflow.no-interpolation", status: /!`/.test(portable) ? "failed" : "passed", detail: /!`/.test(portable) ? "portable skill contains shell interpolation" : "no shell interpolation" });
+    checks.push(skillTextCheck("slopflow.canonical", portable, /artifacts are canonical/i, "states CLI/artifacts are canonical"));
+    checks.push(skillTextCheck("slopflow.no-fabrication", portable, /Do not manually fabricate/i, "forbids fabricated artifacts"));
+    checks.push(skillTextCheck("slopflow.no-push-without-request", portable, /Do not push, merge, publish, create a pull request, or close an issue unless/i, "forbids push/merge/publish/PR/close unless requested"));
+  }
+
+  checks.push({ name: "slopflow-live.exists", status: live ? "passed" : "failed", detail: live ? "skills/slopflow-live/SKILL.md" : "missing skills/slopflow-live/SKILL.md" });
+  if (live) {
+    checks.push({ name: "slopflow-live.read-only-interpolation", status: liveInterpolationIsReadOnly(live) ? "passed" : "failed", detail: liveInterpolationIsReadOnly(live) ? "interpolation commands look read-only" : "interpolation includes mutating command" });
+    checks.push(skillTextCheck("slopflow-live.canonical", live, /artifacts are canonical/i, "states CLI/artifacts are canonical"));
+    checks.push(skillTextCheck("slopflow-live.no-fabrication", live, /Do not manually fabricate/i, "forbids fabricated artifacts"));
+    checks.push(skillTextCheck("slopflow-live.no-push-without-request", live, /Do not push, merge, publish, create a pull request, or close an issue unless/i, "forbids push/merge/publish/PR/close unless requested"));
+  }
+
+  for (const template of setupTemplateFiles(skillsDir)) {
+    const relativePath = relative(skillsDir, template);
+    const content = readOptionalText(template) ?? "";
+    const ok = /^---\n[\s\S]+?\n---\n/.test(content) && /^type:\s*\S.+$/m.test(content.match(/^---\n([\s\S]+?)\n---\n/)?.[1] ?? "");
+    checks.push({ name: `setup-template.${relativePath}`, status: ok ? "passed" : "failed", detail: ok ? "OKF frontmatter with type" : "missing OKF frontmatter type" });
+  }
+  return checks;
+}
+
+function skillTextCheck(name: string, content: string, pattern: RegExp, passedDetail: string): LintCheck {
+  return { name, status: pattern.test(content) ? "passed" : "failed", detail: pattern.test(content) ? passedDetail : `missing ${passedDetail}` };
+}
+
+function liveInterpolationIsReadOnly(content: string): boolean {
+  const commands = [...content.matchAll(/!`([^`]+)`/g)].map((match) => match[1] ?? "");
+  return commands.every((command) => !/\b(slopflow\s+(init|start|test|review|complete|pause|resume|cancel)|jj\s+(new|desc|rebase|git\s+push)|gh\s+(issue|pr)\s+(create|edit|close|comment)|rm\s+-|write|curl\s+-X\s*(POST|PUT|PATCH|DELETE))\b/i.test(command));
+}
+
+function setupTemplateFiles(skillsDir: string): string[] {
+  const result: string[] = [];
+  for (const setupName of ["setup-slopflow-skills", "setup-slopflow-skills-live"]) {
+    const dir = join(skillsDir, setupName);
+    if (!existsSync(dir)) continue;
+    for (const entry of readdirSyncSafe(dir)) {
+      const path = join(dir, entry);
+      if (entry === "SKILL.md" || !entry.endsWith(".md") || !statSync(path).isFile()) continue;
+      result.push(path);
+    }
+  }
+  return result.sort();
+}
+
+function readOptionalText(path: string): string | null {
+  return existsSync(path) ? readFileSync(path, "utf8") : null;
+}
+
+function readdirSyncSafe(path: string): string[] {
+  try {
+    return existsSync(path) ? readdirSync(path) : [];
+  } catch {
+    return [];
+  }
+}
+
+function readPackageNodeEngine(root: string): string | null {
+  const packagePath = join(root, "package.json");
+  if (!existsSync(packagePath)) return null;
+  try {
+    const packageJson = readJson(packagePath) as { engines?: { node?: unknown } };
+    return typeof packageJson.engines?.node === "string" ? packageJson.engines.node : null;
+  } catch {
+    return null;
+  }
+}
+
+function nodeVersionSatisfies(version: string, engine: string): boolean {
+  const major = Number(version.split(".")[0] ?? "0");
+  const minimumMajor = engine.match(/>=\s*(\d+)/)?.[1];
+  if (minimumMajor) return major >= Number(minimumMajor);
+  return true;
 }
 
 async function homeCommand(): Promise<number> {
@@ -770,7 +1129,7 @@ function initCommand({ force }: { force: boolean }): number {
   return 0;
 }
 
-async function statusCommand(): Promise<number> {
+async function statusCommand({ json = false }: { json?: boolean } = {}): Promise<number> {
   const root = findRepoRoot(process.cwd());
   if (!root) {
     throw new SlopflowError(
@@ -786,7 +1145,7 @@ async function statusCommand(): Promise<number> {
   const workCounts = await countWorkDirsByStatus(workRoot);
   const currentJjChange = readCurrentJjChange(root);
 
-  printBlock("status", {
+  const status = {
     state: "initialized",
     repo: config.issue_tracker.repo,
     issue_tracker: config.issue_tracker.type,
@@ -798,7 +1157,9 @@ async function statusCommand(): Promise<number> {
     "cancelled-work-count": workCounts.cancelled,
     "complete-work-count": workCounts.complete,
     "next-step": "slopflow start <issue-id>",
-  });
+  };
+  if (json) printJson({ status });
+  else printBlock("status", status);
   return 0;
 }
 
@@ -1403,9 +1764,13 @@ function printBlock(name: string, values: Record<string, unknown>, stream: NodeJ
   }
 }
 
+function printJson(value: unknown, stream: NodeJS.WritableStream = process.stdout): void {
+  stream.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
 function printHelp(): void {
   process.stdout.write(
-    `Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  start <issue-id>\n  pause <issue-id> --reason <text>\n  resume <issue-id>\n  cancel <issue-id> --reason <text>\n  test <issue-id> --name <gate> -- <command...>\n  review <issue-id>\n  complete <issue-id>\n`,
+    `Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  doctor\n  install minimal [--yes] [--force]\n  install recommended [--yes] [--force]\n  start <issue-id>\n  pause <issue-id> --reason <text>\n  resume <issue-id>\n  cancel <issue-id> --reason <text>\n  test <issue-id> --name <gate> -- <command...>\n  review <issue-id>\n  complete <issue-id>\n`,
   );
 }
 
