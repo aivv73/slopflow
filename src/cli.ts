@@ -93,6 +93,7 @@ class SlopflowError extends Error {
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<number> {
+  const wantsJson = argv.includes("--json");
   try {
     const [command, ...args] = argv;
     if (!command) {
@@ -106,10 +107,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       return initCommand({ force: args.includes("--force") });
     }
     if (command === "status") {
-      return await statusCommand();
+      return await statusCommand({ json: args.includes("--json") });
     }
     if (command === "doctor") {
-      return doctorCommand();
+      return doctorCommand({ json: args.includes("--json") });
     }
     if (command === "install") {
       return installCommand(args);
@@ -138,15 +139,14 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     throw new SlopflowError(`Unknown command: ${command}`, "Run `slopflow --help`.", 2);
   } catch (error) {
     if (error instanceof SlopflowError) {
-      printBlock(
-        "error",
-        {
-          status: "blocked",
-          message: error.message,
-          ...error.details,
-          ...(error.hint ? { hint: error.hint } : {}),
-        },
-      );
+      const payload = {
+        status: "blocked",
+        message: error.message,
+        ...error.details,
+        ...(error.hint ? { hint: error.hint } : {}),
+      };
+      if (wantsJson) printJson({ error: payload });
+      else printBlock("error", payload);
       return error.code;
     }
     throw error;
@@ -159,7 +159,7 @@ type DoctorCheck = {
   detail: string;
 };
 
-function doctorCommand(): number {
+function doctorCommand({ json = false }: { json?: boolean } = {}): number {
   const checks: DoctorCheck[] = [];
   checks.push({ name: "core.slopflow", status: "passed", detail: "cli running" });
 
@@ -247,7 +247,7 @@ function doctorCommand(): number {
   const projectDocsStatus = groupStatus(checks, "project-docs.");
   const recommendedStatus = groupStatus(checks, "recommended.");
 
-  printBlock("doctor", {
+  const doctor = {
     status,
     core: coreStatus,
     "project-docs": projectDocsStatus,
@@ -255,8 +255,14 @@ function doctorCommand(): number {
     "failed-count": failedCount,
     "warning-count": warningCount,
     "next-step": nextStepForDoctor(status, checks),
-  });
-  printBlock(`checks[${checks.length}]`, Object.fromEntries(checks.map((check) => [check.name, `${check.status} ${check.detail}`])));
+  };
+  const checksOutput = Object.fromEntries(checks.map((check) => [check.name, `${check.status} ${check.detail}`]));
+  if (json) {
+    printJson({ doctor, checks: checksOutput });
+  } else {
+    printBlock("doctor", doctor);
+    printBlock(`checks[${checks.length}]`, checksOutput);
+  }
   return failedCount > 0 ? 2 : 0;
 }
 
@@ -1027,7 +1033,7 @@ function initCommand({ force }: { force: boolean }): number {
   return 0;
 }
 
-async function statusCommand(): Promise<number> {
+async function statusCommand({ json = false }: { json?: boolean } = {}): Promise<number> {
   const root = findRepoRoot(process.cwd());
   if (!root) {
     throw new SlopflowError(
@@ -1043,7 +1049,7 @@ async function statusCommand(): Promise<number> {
   const workCounts = await countWorkDirsByStatus(workRoot);
   const currentJjChange = readCurrentJjChange(root);
 
-  printBlock("status", {
+  const status = {
     state: "initialized",
     repo: config.issue_tracker.repo,
     issue_tracker: config.issue_tracker.type,
@@ -1055,7 +1061,9 @@ async function statusCommand(): Promise<number> {
     "cancelled-work-count": workCounts.cancelled,
     "complete-work-count": workCounts.complete,
     "next-step": "slopflow start <issue-id>",
-  });
+  };
+  if (json) printJson({ status });
+  else printBlock("status", status);
   return 0;
 }
 
@@ -1658,6 +1666,10 @@ function printBlock(name: string, values: Record<string, unknown>, stream: NodeJ
   for (const [key, value] of Object.entries(values)) {
     stream.write(`  ${key}: ${String(value)}\n`);
   }
+}
+
+function printJson(value: unknown, stream: NodeJS.WritableStream = process.stdout): void {
+  stream.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
 function printHelp(): void {

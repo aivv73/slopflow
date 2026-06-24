@@ -72,6 +72,12 @@ function slopflow(repo, env, ...args) {
   return run([process.execPath, cliPath, ...args], repo, false, env);
 }
 
+function parseJsonOutput(result) {
+  assert.equal(result.stderr, "");
+  assert.doesNotThrow(() => JSON.parse(result.stdout), result.stdout);
+  return JSON.parse(result.stdout);
+}
+
 function withRepo(fn) {
   return async () => {
     const { dir, repo, env } = makeRepo();
@@ -280,11 +286,37 @@ test("status reports config, jj change, active work count, and next step", requi
   assert.match(result.stdout, /next-step: slopflow start <issue-id>/);
 }));
 
+test("status --json returns valid JSON with status fields", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  mkdirSync(join(repo, ".slopflow", "work", "1"), { recursive: true });
+
+  const result = slopflow(repo, env, "status", "--json");
+  const payload = parseJsonOutput(result);
+
+  assert.equal(result.status, 0);
+  assert.equal(payload.status.state, "initialized");
+  assert.equal(payload.status.repo, "aivv73/slopflow");
+  assert.equal(payload.status.issue_tracker, "github");
+  assert.equal(payload.status.vcs, "jj");
+  assert.equal(payload.status["active-work-count"], 1);
+  assert.equal(payload.status["next-step"], "slopflow start <issue-id>");
+}));
+
 test("status blocks before init", requiresJj, withRepo((repo, env) => {
   const result = slopflow(repo, env, "status");
   assert.equal(result.status, 2);
   assert.match(result.stdout, /status: blocked/);
   assert.match(result.stdout, /Run `slopflow init` first/);
+}));
+
+test("status --json returns structured JSON errors", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env, "status", "--json");
+  const payload = parseJsonOutput(result);
+
+  assert.equal(result.status, 2);
+  assert.equal(payload.error.status, "blocked");
+  assert.equal(payload.error.message, "Slopflow machine config is missing.");
+  assert.equal(payload.error.hint, "Run `slopflow init` first.");
 }));
 
 test("doctor reports initialized repository readiness", requiresJj, withRepo((repo, env) => {
@@ -307,6 +339,24 @@ test("doctor reports initialized repository readiness", requiresJj, withRepo((re
   assert.match(result.stdout, /core.config: passed/);
   assert.match(result.stdout, /recommended.gh: passed/);
   assert.match(result.stdout, /recommended.gh-axi: passed gh-axi executable found/);
+}));
+
+test("doctor --json returns valid JSON with doctor fields and checks", requiresJj, withRepo((repo, env) => {
+  writeProjectDocs(repo);
+  assert.equal(slopflow(repo, env, "init").status, 0);
+
+  const result = slopflow(repo, env, "doctor", "--json");
+  const payload = parseJsonOutput(result);
+
+  assert.equal(result.status, 0);
+  assert.equal(payload.doctor.status, "passed");
+  assert.equal(payload.doctor.core, "passed");
+  assert.equal(payload.doctor["project-docs"], "passed");
+  assert.equal(payload.doctor.recommended, "passed");
+  assert.equal(payload.doctor["failed-count"], 0);
+  assert.equal(payload.doctor["warning-count"], 0);
+  assert.match(payload.checks["core.node"], /^passed node v/);
+  assert.equal(payload.checks["recommended.gh-axi"], "passed gh-axi executable found");
 }));
 
 test("doctor fails before initialization and suggests init", requiresJj, withRepo((repo, env) => {

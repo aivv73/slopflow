@@ -49,6 +49,25 @@ error:
 
 Canonical Slopflow status, gate, and error output is written to stdout so agents can parse a single structured stream. Stderr is reserved for debug output and wrapped-command logs; `slopflow test` captures wrapped command stdout/stderr in evidence logs under `.slopflow/work/<issue-id>/evidence/logs/`.
 
+Use `--json` only when scripts or integrations need machine JSON output. The default remains compact key-block output for agents. Initial JSON modes are:
+
+```bash
+slopflow status --json
+slopflow doctor --json
+```
+
+Errors with `--json` return structured JSON error objects:
+
+```json
+{
+  "error": {
+    "status": "blocked",
+    "message": "Slopflow machine config is missing.",
+    "hint": "Run `slopflow init` first."
+  }
+}
+```
+
 ### Doctor output and severity
 
 `slopflow doctor` is a read-only setup diagnostic. It uses the same compact key-block format and reports a top-level status plus grouped severities:
