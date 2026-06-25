@@ -16,7 +16,7 @@ If shell execution is disabled by policy, treat the live context as unavailable 
 
 ## What it does
 
-- Injects a read-only snapshot of current Slopflow, Jujutsu, work artifact, domain, and ADR context before the model sees the skill.
+- Injects a read-only snapshot of current Slopflow, configured VCS, work artifact, domain, and ADR context before the model sees the skill.
 - Keeps issue execution scoped to Slopflow's local artifacts and gates.
 - Starts issue work with `slopflow start <issue-id>`.
 - Records test evidence with `slopflow test <issue-id> --name <gate> -- <command...>`.
@@ -28,7 +28,7 @@ If shell execution is disabled by policy, treat the live context as unavailable 
 ## Live context
 
 - Slopflow status: !`slopflow status 2>&1 || true`
-- Jujutsu status: !`jj --no-pager status 2>&1 || true`
+- VCS status: !`if test -d .jj && command -v jj >/dev/null 2>&1; then jj --no-pager status; elif command -v git >/dev/null 2>&1; then git status --short --branch; else echo 'no supported VCS tool found'; fi 2>&1 || true`
 - Active Slopflow work files: !`find .slopflow/work -maxdepth 5 -type f 2>/dev/null | sort | sed -n '1,200p' || true`
 - Attempt workspace pointer: !`test -f .slopflow-attempt.json && cat .slopflow-attempt.json || true`
 - Agent setup docs: !`for file in docs/agents/issue-tracker.md docs/agents/triage-labels.md docs/agents/domain.md; do test -f "$file" && echo "present: $file" || echo "missing: $file"; done`

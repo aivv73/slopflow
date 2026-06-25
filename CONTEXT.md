@@ -13,7 +13,7 @@ A command-line workflow guide that prepares state, records evidence, checks gate
 _Avoid_: Autonomous orchestrator, background agent, daemon
 
 **Start**:
-The Slopflow action that bootstraps controlled work for an existing issue by preparing local artifacts, associating a Jujutsu change, and producing next-step instructions.
+The Slopflow action that bootstraps controlled work for an existing issue by preparing local artifacts, associating work with the configured VCS repository, and producing next-step instructions. Jujutsu is recommended, but Git is supported.
 _Avoid_: Run, execute, implement
 
 **Issue execution contract**:
@@ -102,7 +102,7 @@ It generates `completion-note.md` when missing after all gates pass, but preserv
 In v0, completion requires at least one latest test evidence gate to be passed and no latest test evidence gate to be failed; it does not parse required gates from the markdown issue execution contract.
 If test evidence is missing, v0 completion may proceed only when `evidence/test-exception.md` exists and the reviewer verdict is complete, treating the reviewer approval as acceptance of the exception.
 It preserves existing `status.json` fields and sets `status: "complete"` plus `completed_at` when local completion succeeds.
-It verifies Jujutsu status is readable but does not require an empty diff, because the working copy commit is the issue change in Jujutsu.
+It verifies the configured VCS status is readable but does not require an empty diff, because local changes are the issue work under review.
 Its output status is `complete` on success or `blocked` when a required local artifact gate is missing or failing, with exit code 2 for blocked completion.
 
 **Pause**:
@@ -161,7 +161,7 @@ The Slopflow action that prepares a review packet and reports whether a reviewer
 _Avoid_: Reviewer agent, automatic approval
 Its v0 CLI shape is `slopflow review <issue-id>`, where the issue id is required and numeric, initialized machine config is required, and the issue work directory plus `status.json` must exist.
 It never creates `review.json`; reviewer verdicts are written by a separate human or agent reviewer so Slopflow does not self-approve work.
-Its review packet is a hybrid artifact: it inlines the contract, test evidence summary, Jujutsu status, changed files, reviewer instructions, and a bounded diff excerpt, while referencing full logs and commands for deeper inspection. The v0 inline diff limit is 50,000 characters.
+Its review packet is a hybrid artifact: it inlines the contract, test evidence summary, configured VCS status, changed files, reviewer instructions, and a bounded diff excerpt, while referencing full logs and commands for deeper inspection. The v0 inline diff limit is 50,000 characters.
 It does not block when test evidence is missing; instead it marks missing evidence in the packet and output so the reviewer can request changes. Completion remains the strict evidence gate.
 Its output statuses are `pending` when `review.json` is missing, `complete` when the verdict approves completion, `changes-requested` when the verdict requests changes, and `blocked` when the verdict artifact is invalid.
 
