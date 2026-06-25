@@ -60,6 +60,39 @@ process.exit(1);
   return { dir, repo, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } };
 }
 
+function makeGitRepo() {
+  const dir = mkdtempSync(join(tmpdir(), "slopflow-git-test-"));
+  const repo = join(dir, "repo");
+  mkdirSync(repo);
+  run(["git", "init", "-q"], repo, true);
+  run(["git", "remote", "add", "origin", "https://github.com/aivv73/slopflow.git"], repo, true);
+  writeFileSync(join(repo, "package.json"), JSON.stringify({ engines: { node: ">=24" } }), "utf8");
+  const bin = join(dir, "bin");
+  mkdirSync(bin);
+  const ghPath = join(bin, "gh");
+  writeFileSync(
+    ghPath,
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  console.log("gh version 0.0.0-test");
+  process.exit(0);
+}
+if (args[0] === "issue" && args[1] === "view" && Number(args[2]) === 2) {
+  console.log(JSON.stringify({ number: 2, title: "Git issue", body: "- Do work", url: "https://github.com/aivv73/slopflow/issues/2", state: "OPEN" }));
+  process.exit(0);
+}
+process.stderr.write("not found\\n");
+process.exit(1);
+`,
+  );
+  chmodSync(ghPath, 0o755);
+  const ghAxiPath = join(bin, "gh-axi");
+  writeFileSync(ghAxiPath, "#!/bin/sh\necho 'gh-axi 0.0.0-test'\n", "utf8");
+  chmodSync(ghAxiPath, 0o755);
+  return { dir, repo, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } };
+}
+
 function run(args, cwd, check = false, env = process.env) {
   const result = spawnSync(args[0], args.slice(1), { cwd, encoding: "utf8", env });
   if (check && result.status !== 0) {
@@ -87,6 +120,17 @@ function withRepo(fn) {
     const { dir, repo, env } = makeRepo();
     try {
       await fn(repo, env);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+}
+
+function withGitRepo(fn) {
+  return async (t) => {
+    const { dir, repo, env } = makeGitRepo();
+    try {
+      await fn(repo, env, t);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -153,6 +197,32 @@ test("init creates machine config and work root", requiresJj, withRepo((repo, en
   });
 }));
 
+test("init supports plain Git repositories and recommends jj", withGitRepo((repo, env) => {
+  const result = slopflow(repo, env, "init");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /vcs: git/);
+  assert.match(result.stdout, /Jujutsu \(jj\) is recommended/);
+
+  const config = JSON.parse(readFileSync(join(repo, ".slopflow", "config.json"), "utf8"));
+  assert.equal(config.vcs.type, "git");
+  assert.equal(existsSync(join(repo, ".slopflow", "work")), true);
+}));
+
+test("start and status work in plain Git repositories", withGitRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+
+  const start = slopflow(repo, env, "start", "2");
+  assert.equal(start.status, 0, start.stderr);
+  assert.match(start.stdout, /status: created/);
+
+  const status = slopflow(repo, env, "status");
+  assert.equal(status.status, 0, status.stderr);
+  assert.match(status.stdout, /vcs: git/);
+  assert.match(status.stdout, /current-vcs-state:/);
+  assert.doesNotMatch(status.stdout, /current-jj-change:/);
+}));
+
 test("init is idempotent for matching config", requiresJj, withRepo((repo, env) => {
   assert.equal(slopflow(repo, env, "init").status, 0);
   const second = slopflow(repo, env, "init");
@@ -210,7 +280,7 @@ test("install requires explicit harness in non-interactive mode", requiresJj, wi
 
   assert.equal(result.status, 2);
   assert.match(result.stdout, /Missing harness selection/);
-  assert.match(result.stdout, /slopflow install --harness pi\|claude-code\|generic/);
+  assert.match(result.stdout, /slopflow install --harness pi\|omp\|claude-code\|generic/);
 }));
 
 test("install pi dry-run prints project-local workflow pack plan without writing", requiresJj, withRepo((repo, env) => {
@@ -225,7 +295,7 @@ test("install pi dry-run prints project-local workflow pack plan without writing
   assert.match(result.stdout, /extensions: \.pi\/extensions/);
   assert.match(result.stdout, /agents: \.pi\/agents/);
   assert.match(result.stdout, /settings: \.pi\/settings\.json/);
-  assert.match(result.stdout, /packages: 4/);
+  assert.match(result.stdout, /packages: 3/);
   assert.match(result.stdout, /writes: none/);
   assert.match(result.stdout, /next-step: slopflow install --harness pi --yes/);
   assert.equal(existsSync(join(repo, ".pi", "skills", "slopflow-live", "SKILL.md")), false);
@@ -248,11 +318,11 @@ test("install pi --yes writes local extensions live skills and agent roles", req
   assert.match(extension, /slopflow", \["start", issueId\]/);
   const settings = JSON.parse(readFileSync(join(repo, ".pi", "settings.json"), "utf8"));
   assert.deepEqual(settings.packages, [
-    "npm:@howaboua/pi-codex-conversion",
     "git:github.com/joelhooks/pi-skill-interpolation",
     "npm:@tintinweb/pi-subagents",
     "npm:pi-codex-goal",
   ]);
+  assert.equal(settings.packages.includes("npm:@howaboua/pi-codex-conversion"), false);
   const planner = readFileSync(join(repo, ".pi", "agents", "slopflow-planner.md"), "utf8");
   const executor = readFileSync(join(repo, ".pi", "agents", "slopflow-executor.md"), "utf8");
   const reviewer = readFileSync(join(repo, ".pi", "agents", "slopflow-reviewer.md"), "utf8");
@@ -283,13 +353,51 @@ test("install pi merges existing project settings packages", requiresJj, withRep
   assert.equal(settings.enableSkillCommands, true);
   assert.deepEqual(settings.packages, [
     "npm:existing-pkg",
-    "npm:@howaboua/pi-codex-conversion",
     "git:github.com/joelhooks/pi-skill-interpolation",
     "npm:@tintinweb/pi-subagents",
     "npm:pi-codex-goal",
   ]);
+  assert.equal(settings.packages.includes("npm:@howaboua/pi-codex-conversion"), false);
 }));
 
+
+test("install omp dry-run prints native profile plan without writing", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env, "install", "--harness", "omp");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /status: planned/);
+  assert.match(result.stdout, /harness: omp/);
+  assert.match(result.stdout, /skills: \.omp\/skills/);
+  assert.match(result.stdout, /commands: \.omp\/commands/);
+  assert.match(result.stdout, /skill-interpolation: git:github\.com\/joelhooks\/pi-skill-interpolation/);
+  assert.match(result.stdout, /native-subagents: task/);
+  assert.match(result.stdout, /native-goal: goal/);
+  assert.match(result.stdout, /writes: none/);
+  assert.match(result.stdout, /next-step: slopflow install --harness omp --yes/);
+  assert.equal(existsSync(join(repo, ".omp", "skills", "slopflow-live", "SKILL.md")), false);
+  assert.equal(existsSync(join(repo, ".omp", "commands", "slopflow-create-goal.md")), false);
+  assert.equal(existsSync(join(repo, ".pi", "settings.json")), false);
+}));
+
+test("install omp --yes writes native skills and goal command", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env, "install", "--harness=omp", "--yes");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /status: applied/);
+  assert.match(result.stdout, /harness: omp/);
+  assert.match(result.stdout, /skill-interpolation: git:github\.com\/joelhooks\/pi-skill-interpolation/);
+  assert.match(result.stdout, /native-subagents: task/);
+  assert.match(result.stdout, /native-goal: goal/);
+  assert.equal(existsSync(join(repo, ".omp", "skills", "slopflow-live", "SKILL.md")), true);
+  assert.equal(existsSync(join(repo, ".omp", "skills", "setup-slopflow-skills-live", "SKILL.md")), true);
+  const command = readFileSync(join(repo, ".omp", "commands", "slopflow-create-goal.md"), "utf8");
+  assert.match(command, /\/goal set <goal prompt content>/);
+  assert.match(command, /OMP native primitives/);
+  assert.match(command, /task/);
+  assert.match(command, /git:github\.com\/joelhooks\/pi-skill-interpolation/);
+  assert.doesNotMatch(command, /npm:@howaboua\/pi-codex-conversion/);
+  assert.equal(existsSync(join(repo, ".pi", "settings.json")), false);
+}));
 test("install claude-code --yes writes local live skills", requiresJj, withRepo((repo, env) => {
   const result = slopflow(repo, env, "install", "--harness=claude-code", "--yes");
 

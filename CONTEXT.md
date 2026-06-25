@@ -13,7 +13,7 @@ A command-line workflow guide that prepares state, records evidence, checks gate
 _Avoid_: Autonomous orchestrator, background agent, daemon
 
 **Start**:
-The Slopflow action that bootstraps controlled work for an existing issue by preparing local artifacts, associating a Jujutsu change, and producing next-step instructions.
+The Slopflow action that bootstraps controlled work for an existing issue by preparing local artifacts, associating work with the configured VCS repository, and producing next-step instructions. Jujutsu is recommended, but Git is supported.
 _Avoid_: Run, execute, implement
 
 **Issue execution contract**:
@@ -25,10 +25,10 @@ A structured identifier for the configured issue tracker item, including provide
 _Avoid_: Bare issue id, ticket string
 
 **Goal mirror**:
-A Pi persistent goal created from the issue execution contract so the active coding session keeps the same objective in context.
+An agent-harness persistent goal created from the issue execution contract so the active coding session keeps the same objective in context.
 _Avoid_: Canonical contract, source of truth
 
-By default, `start` writes a `goal-prompt.md` artifact for creating a goal mirror. Automatic goal creation is opt-in.
+By default, `start` writes a `goal-prompt.md` artifact for creating a goal mirror. Automatic native goal creation is opt-in and depends on the active agent harness.
 
 **Work directory**:
 The `.slopflow/work/<issue-id>/` directory that stores the local contract, evidence, reviewer verdict, status metadata, and completion note for one issue.
@@ -102,7 +102,7 @@ It generates `completion-note.md` when missing after all gates pass, but preserv
 In v0, completion requires at least one latest test evidence gate to be passed and no latest test evidence gate to be failed; it does not parse required gates from the markdown issue execution contract.
 If test evidence is missing, v0 completion may proceed only when `evidence/test-exception.md` exists and the reviewer verdict is complete, treating the reviewer approval as acceptance of the exception.
 It preserves existing `status.json` fields and sets `status: "complete"` plus `completed_at` when local completion succeeds.
-It verifies Jujutsu status is readable but does not require an empty diff, because the working copy commit is the issue change in Jujutsu.
+It verifies the configured VCS status is readable but does not require an empty diff, because local changes are the issue work under review.
 Its output status is `complete` on success or `blocked` when a required local artifact gate is missing or failing, with exit code 2 for blocked completion.
 
 **Pause**:
@@ -161,7 +161,7 @@ The Slopflow action that prepares a review packet and reports whether a reviewer
 _Avoid_: Reviewer agent, automatic approval
 Its v0 CLI shape is `slopflow review <issue-id>`, where the issue id is required and numeric, initialized machine config is required, and the issue work directory plus `status.json` must exist.
 It never creates `review.json`; reviewer verdicts are written by a separate human or agent reviewer so Slopflow does not self-approve work.
-Its review packet is a hybrid artifact: it inlines the contract, test evidence summary, Jujutsu status, changed files, reviewer instructions, and a bounded diff excerpt, while referencing full logs and commands for deeper inspection. The v0 inline diff limit is 50,000 characters.
+Its review packet is a hybrid artifact: it inlines the contract, test evidence summary, configured VCS status, changed files, reviewer instructions, and a bounded diff excerpt, while referencing full logs and commands for deeper inspection. The v0 inline diff limit is 50,000 characters.
 It does not block when test evidence is missing; instead it marks missing evidence in the packet and output so the reviewer can request changes. Completion remains the strict evidence gate.
 Its output statuses are `pending` when `review.json` is missing, `complete` when the verdict approves completion, `changes-requested` when the verdict requests changes, and `blocked` when the verdict artifact is invalid.
 
@@ -172,6 +172,18 @@ _Avoid_: Agent instructions, domain docs, product spec
 **Agent skill**:
 A distributable instruction package that teaches an agent harness how to follow Slopflow safely. Agent skills are distributed through a skills installer such as Vercel Skills rather than being installed or wired into each agent harness by the Slopflow CLI.
 _Avoid_: CLI plugin, runtime integration, built-in agent adapter
+
+**Agent capability requirement**:
+A declarative requirement in an agent-facing Slopflow artifact that names a capability expected from the active agent harness, such as subagents, goal mirrors, or agent skill loading.
+_Avoid_: Runtime integration, installed dependency, managed feature
+
+**Skill reference interpolation**:
+The Slopflow practice of placing required agent skill references into generated agent-facing artifacts while leaving skill installation and execution to the active agent harness.
+_Avoid_: Skill installation, harness wiring, built-in skill runtime
+
+**Runtime adapter**:
+An optional Slopflow-adjacent tool or recipe that translates portable Slopflow artifacts for a specific agent harness.
+_Avoid_: Core dependency, required installer component, agent runtime
 
 **Setup skill**:
 An agent skill intended to run first in a newly onboarded project so the project's issue tracker, triage label vocabulary, and domain documentation layout are recorded before issue execution starts.
