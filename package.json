@@ -1,6 +1,6 @@
 {
   "name": "slopflow",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Controlled issue execution workflow for AI coding agents",
   "license": "MIT",
   "type": "module",
@@ -10,6 +10,7 @@
     "cli",
     "workflow",
     "jujutsu",
+    "git",
     "slopflow"
   ],
   "repository": {

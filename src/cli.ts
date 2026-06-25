@@ -25,6 +25,8 @@ type MachineConfig = {
   };
 };
 
+type SupportedVcs = "jj" | "git";
+
 type IssueReference = {
   provider: "github";
   repo: string;
@@ -213,24 +215,36 @@ function doctorCommand({ json = false }: { json?: boolean } = {}): number {
     detail: nodeEngine ? `node v${process.versions.node} satisfies ${nodeEngine}` : `node v${process.versions.node}; package.json engines.node not found`,
   });
 
-  const jjPresent = commandExists("jj");
-  checks.push({
-    name: "core.jj",
-    status: jjPresent ? "passed" : "failed",
-    detail: jjPresent ? "jj executable found" : "jj executable missing",
-  });
-
   checks.push({
     name: "core.repository",
     status: root ? "passed" : "failed",
     detail: root ? `root ${relativeToCwd(root)}` : "no .jj or .git repository root found",
   });
 
+  const jjPresent = commandExists("jj");
+  const gitPresent = commandExists("git");
   const jjRepo = root ? existsSync(join(root, ".jj")) : false;
+  const gitRepo = root ? existsSync(join(root, ".git")) : false;
+  const detectedVcs = root ? detectVcsType(root) : null;
+  const vcsToolPresent = detectedVcs === "jj" ? jjPresent : detectedVcs === "git" ? gitPresent : false;
   checks.push({
-    name: "core.jj-repo",
-    status: jjRepo ? "passed" : "failed",
-    detail: jjRepo ? ".jj present" : "Jujutsu repository not detected",
+    name: "core.vcs-repo",
+    status: jjRepo || gitRepo ? "passed" : "failed",
+    detail: jjRepo ? "Jujutsu repository detected" : gitRepo ? "Git repository detected" : "no Jujutsu or Git repository detected",
+  });
+  checks.push({
+    name: "core.vcs-tool",
+    status: vcsToolPresent ? "passed" : "failed",
+    detail: detectedVcs === "jj"
+      ? (jjPresent ? "jj executable found" : "jj executable missing")
+      : detectedVcs === "git"
+        ? (gitPresent ? "git executable found" : "git executable missing")
+        : "no supported VCS tool selected",
+  });
+  checks.push({
+    name: "recommended.jj",
+    status: jjPresent ? "passed" : "warn",
+    detail: jjPresent ? "jj executable found" : "jj executable missing; Git is supported, but Jujutsu is recommended",
   });
 
   const configPath = root ? join(root, ".slopflow", "config.json") : "";
@@ -319,9 +333,10 @@ function nextStepForDoctor(status: string, checks: DoctorCheck[]): string {
   const firstFailed = checks.find((check) => check.status === "failed");
   if (firstFailed?.name === "core.config") return "slopflow init";
   if (firstFailed?.name === "core.work-root") return "slopflow init";
-  if (firstFailed?.name === "core.jj") return "install jj";
-  if (firstFailed?.name === "core.repository" || firstFailed?.name === "core.jj-repo") return "run inside a Jujutsu repository";
+  if (firstFailed?.name === "core.vcs-tool") return "install the configured VCS tool";
+  if (firstFailed?.name === "core.repository" || firstFailed?.name === "core.vcs-repo") return "run inside a Jujutsu or Git repository";
   const firstWarn = checks.find((check) => check.status === "warn");
+  if (firstWarn?.name === "recommended.jj") return "install jj when you want the recommended Slopflow workflow, or continue with Git";
   if (firstWarn?.name === "recommended.gh") return "install gh or continue if GitHub start is not needed";
   if (firstWarn?.name === "recommended.gh-axi") return "run npx -y gh-axi --help when GitHub AXI operations are needed";
   return "inspect doctor checks";
@@ -828,7 +843,7 @@ async function homeCommand(): Promise<number> {
       description,
       state: "uninitialized",
       "repo-root": relativeToCwd(root),
-      vcs: existsSync(join(root, ".jj")) ? "jj" : "unknown",
+      vcs: detectVcsType(root) ?? "unknown",
       "next-step": "slopflow init",
     });
     return 0;
@@ -848,7 +863,8 @@ async function homeCommand(): Promise<number> {
     issue_tracker: config.issue_tracker.type,
     vcs: config.vcs.type,
     "artifact-root": artifactRoot,
-    "current-jj-change": readCurrentJjChange(root),
+    "current-vcs-state": readCurrentVcsState(root, config.vcs.type),
+    ...(config.vcs.type === "jj" ? { "current-jj-change": readCurrentJjChange(root) } : {}),
     "active-work-count": workCounts.active,
     "paused-work-count": workCounts.paused,
     "cancelled-work-count": workCounts.cancelled,
@@ -894,8 +910,8 @@ function completeCommand(args: string[]): number {
   if (!existsSync(contractPath)) {
     return completeBlocked(issueText, "missing contract.md", "restore contract.md or rerun slopflow start", workDir);
   }
-  if (!isJjStatusReadable(executionRoot)) {
-    return completeBlocked(issueText, "jj status is not readable", "fix Jujutsu repository state", workDir);
+  if (!isVcsStatusReadable(executionRoot, config.vcs.type)) {
+    return completeBlocked(issueText, `${config.vcs.type} status is not readable`, `fix ${vcsDisplayName(config.vcs.type)} repository state`, workDir);
   }
 
   const reviewPath = join(workDir, "review.json");
@@ -1057,7 +1073,7 @@ function reviewCommand(args: string[]): number {
   const testEvidenceStatus = existsSync(testsPath) ? "present" : "missing";
   const reviewPath = join(workDir, "review.json");
   const packetPath = join(workDir, "review-packet.md");
-  writeFileSync(packetPath, buildReviewPacket({ root: executionRoot, workDir, issue, testsPath }), "utf8");
+  writeFileSync(packetPath, buildReviewPacket({ root: executionRoot, workDir, issue, testsPath, vcs: config.vcs.type }), "utf8");
 
   if (!existsSync(reviewPath)) {
     printBlock("review", {
@@ -1884,6 +1900,7 @@ function lifecycleCommand(action: "pause" | "resume" | "cancel", args: string[])
   const testsSummary = summarizeLatestTests(workDir);
   const reviewStatus = summarizeReviewVerdict(workDir);
   const completionStatus = existsSync(join(workDir, "completion-note.md")) || workStatus.status === "complete" ? "complete" : "incomplete";
+  const config = readMachineConfig(root);
   printBlock("resume", {
     status: wasPaused ? "active" : String(workStatus.status ?? "active"),
     issue: issueText,
@@ -1891,7 +1908,8 @@ function lifecycleCommand(action: "pause" | "resume" | "cancel", args: string[])
     tests: testsSummary,
     review: reviewStatus,
     completion: completionStatus,
-    "current-jj-change": readCurrentJjChange(root),
+    "current-vcs-state": readCurrentVcsState(root, config.vcs.type),
+    ...(config.vcs.type === "jj" ? { "current-jj-change": readCurrentJjChange(root) } : {}),
     "next-step": nextStepForWork(issueId!, workDir, reviewStatus, completionStatus),
   });
   return 0;
@@ -2102,7 +2120,7 @@ function initCommand({ force }: { force: boolean }): number {
   const repo = discoverRepoContext(process.cwd());
   const configPath = join(repo.root, ".slopflow", "config.json");
   const workPath = join(repo.root, DEFAULT_ARTIFACT_ROOT);
-  const desired = desiredConfig(repo.githubRepo);
+  const desired = desiredConfig(repo.githubRepo, repo.vcs);
 
   let action = "created";
   if (existsSync(configPath)) {
@@ -2129,7 +2147,8 @@ function initCommand({ force }: { force: boolean }): number {
   printBlock("init", {
     status: action,
     repo: repo.githubRepo,
-    vcs: "jj",
+    vcs: repo.vcs,
+    recommendation: repo.vcs === "git" ? "Jujutsu (jj) is recommended for the smoothest Slopflow workflow; Git is supported." : "Jujutsu (jj) is the recommended Slopflow workflow.",
     config: relativeToCwd(configPath),
     "artifact-root": desired.artifact_root,
     "next-step": "slopflow status",
@@ -2142,7 +2161,7 @@ async function statusCommand({ json = false }: { json?: boolean } = {}): Promise
   if (!root) {
     throw new SlopflowError(
       "Could not find a repository root.",
-      "Run Slopflow inside a Jujutsu repository.",
+      "Run Slopflow inside a Jujutsu or Git repository.",
       2,
     );
   }
@@ -2152,7 +2171,7 @@ async function statusCommand({ json = false }: { json?: boolean } = {}): Promise
   const workRoot = join(root, artifactRoot);
   const workCounts = await countWorkDirsByStatus(workRoot);
   const attemptCount = await countAgentAttempts(workRoot);
-  const currentJjChange = readCurrentJjChange(root);
+  const currentVcsState = readCurrentVcsState(root, config.vcs.type);
 
   const status = {
     state: "initialized",
@@ -2160,7 +2179,8 @@ async function statusCommand({ json = false }: { json?: boolean } = {}): Promise
     issue_tracker: config.issue_tracker.type,
     vcs: config.vcs.type,
     "artifact-root": artifactRoot,
-    "current-jj-change": currentJjChange,
+    "current-vcs-state": currentVcsState,
+    ...(config.vcs.type === "jj" ? { "current-jj-change": readCurrentJjChange(root) } : {}),
     "active-work-count": workCounts.active,
     "paused-work-count": workCounts.paused,
     "cancelled-work-count": workCounts.cancelled,
@@ -2393,14 +2413,16 @@ function buildNextSteps(issueReference: IssueReference): string {
     `6. Do not mark complete until reviewer verdict and required evidence exist.\n`;
 }
 
-function buildReviewPacket({ root, workDir, issue, testsPath }: { root: string; workDir: string; issue: IssueReference; testsPath: string }): string {
+function buildReviewPacket({ root, workDir, issue, testsPath, vcs }: { root: string; workDir: string; issue: IssueReference; testsPath: string; vcs: string }): string {
   const contractPath = join(workDir, "contract.md");
   const contract = existsSync(contractPath) ? readFileSync(contractPath, "utf8") : "_Missing contract.md_";
   const testsSummary = buildTestEvidenceSummary(testsPath);
-  const jjStatus = runTextCommand("jj", ["--no-pager", "status"], root);
-  const diff = runTextCommand("jj", ["--no-pager", "diff", "--git"], root);
+  const vcsStatus = readVcsStatus(root, vcs);
+  const diff = readVcsDiff(root, vcs);
   const boundedDiff = boundText(diff, REVIEW_DIFF_LIMIT);
   const changedFiles = changedFilesFromDiff(diff);
+  const statusHeading = vcs === "jj" ? "Jujutsu Status" : vcs === "git" ? "Git Status" : "VCS Status";
+  const diffCommand = vcs === "jj" ? "jj --no-pager diff --git" : vcs === "git" ? "git diff -- ." : "the configured VCS diff command";
 
   return `# Review Packet\n\n` +
     `## Issue Reference\n\n` +
@@ -2424,11 +2446,11 @@ function buildReviewPacket({ root, workDir, issue, testsPath }: { root: string; 
     `## Contract\n\n` +
     "```markdown\n" + contract + "\n```\n\n" +
     `## Test Evidence Summary\n\n${testsSummary}\n\n` +
-    `## Jujutsu Status\n\n` +
-    "```text\n" + jjStatus + "\n```\n\n" +
+    `## ${statusHeading}\n\n` +
+    "```text\n" + vcsStatus + "\n```\n\n" +
     `## Changed Files\n\n${changedFiles.length > 0 ? changedFiles.map((file) => `- ${file}`).join("\n") : "_No changed files detected._"}\n\n` +
     `## Diff Excerpt\n\n` +
-    `Inline diff limit: ${REVIEW_DIFF_LIMIT} characters. Run \`jj --no-pager diff --git\` for the full diff.\n\n` +
+    `Inline diff limit: ${REVIEW_DIFF_LIMIT} characters. Run \`${diffCommand}\` for the full diff.\n\n` +
     "```diff\n" + boundedDiff.text + "\n```\n" +
     (boundedDiff.truncated ? "\n_Diff excerpt truncated._\n" : "");
 }
@@ -2526,26 +2548,36 @@ function escapeMarkdown(value: string): string {
   return value.replace(/^#/gm, "\\#");
 }
 
-function discoverRepoContext(start: string): { root: string; githubRepo: string } {
+function discoverRepoContext(start: string): { root: string; githubRepo: string; vcs: SupportedVcs } {
   const root = findRepoRoot(start);
   if (!root) {
     throw new SlopflowError(
       "Could not find a repository root.",
-      "Run `slopflow init` inside a Jujutsu repository with a GitHub origin remote.",
+      "Run `slopflow init` inside a Jujutsu or Git repository with a GitHub origin remote.",
       2,
     );
   }
-  if (!existsSync(join(root, ".jj"))) {
+  const vcs = detectVcsType(root);
+  if (!vcs) {
     throw new SlopflowError(
-      "Jujutsu repository not detected.",
-      "Initialize Jujutsu first; Slopflow v0 only supports jj-backed work.",
+      "Supported VCS repository not detected.",
+      "Initialize Jujutsu (recommended) or Git before running `slopflow init`.",
       2,
     );
   }
-  if (!commandExists("jj")) {
-    throw new SlopflowError("Jujutsu executable not found.", "Install `jj` before running `slopflow init`.", 2);
+  if (vcs === "jj" && !commandExists("jj")) {
+    throw new SlopflowError("Jujutsu executable not found.", "Install `jj` or use a Git repository without .jj metadata.", 2);
   }
-  return { root, githubRepo: readGithubRepo(root) };
+  if (vcs === "git" && !commandExists("git")) {
+    throw new SlopflowError("Git executable not found.", "Install `git` before running `slopflow init`.", 2);
+  }
+  return { root, githubRepo: readGithubRepo(root), vcs };
+}
+
+function detectVcsType(root: string): SupportedVcs | null {
+  if (existsSync(join(root, ".jj"))) return "jj";
+  if (existsSync(join(root, ".git"))) return "git";
+  return null;
 }
 
 function findRepoRoot(start: string): string | null {
@@ -2621,7 +2653,7 @@ function parseGithubRemote(url: string): string | null {
   return null;
 }
 
-function desiredConfig(githubRepo: string): MachineConfig {
+function desiredConfig(githubRepo: string, vcs: SupportedVcs): MachineConfig {
   return {
     schema_version: SCHEMA_VERSION,
     artifact_root: DEFAULT_ARTIFACT_ROOT,
@@ -2631,7 +2663,7 @@ function desiredConfig(githubRepo: string): MachineConfig {
       repo: githubRepo,
       prs_as_request_surface: DEFAULT_PRS_AS_REQUEST_SURFACE,
     },
-    vcs: { type: "jj" },
+    vcs: { type: vcs },
   };
 }
 
@@ -2770,9 +2802,41 @@ function readCurrentJjChange(root: string): string {
   return "unknown";
 }
 
-function isJjStatusReadable(root: string): boolean {
-  const result = spawnSync("jj", ["--no-pager", "status"], { cwd: root, encoding: "utf8" });
+function readCurrentVcsState(root: string, vcs: string): string {
+  if (vcs === "jj") return readCurrentJjChange(root);
+  if (vcs === "git") {
+    const branch = runTextCommand("git", ["branch", "--show-current"], root) || "detached HEAD";
+    const status = runTextCommand("git", ["status", "--short"], root);
+    const changed = status ? status.split("\n").filter(Boolean).length : 0;
+    return `${branch}; ${changed} changed file${changed === 1 ? "" : "s"}`;
+  }
+  return "unsupported VCS";
+}
+
+function readVcsStatus(root: string, vcs: string): string {
+  if (vcs === "jj") return runTextCommand("jj", ["--no-pager", "status"], root);
+  if (vcs === "git") return runTextCommand("git", ["status", "--short", "--branch"], root);
+  return `unsupported VCS: ${vcs}`;
+}
+
+function readVcsDiff(root: string, vcs: string): string {
+  if (vcs === "jj") return runTextCommand("jj", ["--no-pager", "diff", "--git"], root);
+  if (vcs === "git") return runTextCommand("git", ["diff", "--", "."], root);
+  return `unsupported VCS: ${vcs}`;
+}
+
+function isVcsStatusReadable(root: string, vcs: string): boolean {
+  const command = vcs === "jj" ? "jj" : vcs === "git" ? "git" : "";
+  const args = vcs === "jj" ? ["--no-pager", "status"] : vcs === "git" ? ["status", "--short"] : [];
+  if (!command) return false;
+  const result = spawnSync(command, args, { cwd: root, encoding: "utf8" });
   return !result.error && result.status === 0;
+}
+
+function vcsDisplayName(vcs: string): string {
+  if (vcs === "jj") return "Jujutsu";
+  if (vcs === "git") return "Git";
+  return vcs;
 }
 
 function commandExists(command: string): boolean {

@@ -65,7 +65,8 @@ Slopflow connects the workflow to harnesses and tools:
 - Pi
 - Claude Code
 - generic Agent Skills-compatible tools
-- Jujutsu (`jj`)
+- Jujutsu (`jj`, recommended)
+- Git
 - GitHub
 - `pi-subagents`
 - `pi-codex-goal`
@@ -86,7 +87,7 @@ From the repository you want agents to work in:
 slopflow init
 ```
 
-The current issue workflow is optimized for Jujutsu (`jj`) and GitHub; `slopflow doctor` will report missing prerequisites and setup gaps.
+The current issue workflow supports Git and Jujutsu (`jj`) repositories. Jujutsu is recommended for the smoothest local change/workspace workflow, but it is not required; `slopflow doctor` reports missing prerequisites and setup gaps.
 
 Install a workflow pack. Dry-run is the default:
 
@@ -376,6 +377,7 @@ status:
   issue_tracker: github
   vcs: jj
   artifact-root: .slopflow/work
+  current-vcs-state: zsuskvpx 5a9ba73d main* | Add feature
   next-step: slopflow start <issue-id>
 ```
 
@@ -424,7 +426,8 @@ doctor:
   next-step: run npx -y gh-axi --help when GitHub AXI operations are needed
 checks[...]:
   core.node: passed node v26.1.0 satisfies >=24
-  core.jj: passed jj executable found
+  core.vcs-tool: passed jj executable found
+  recommended.jj: passed jj executable found
   recommended.gh-axi: warn unchecked; run npx -y gh-axi --help when GitHub AXI operations are needed
 ```
 
