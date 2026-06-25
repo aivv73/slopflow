@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
@@ -16,8 +17,9 @@ type MachineConfig = {
   artifact_root: string;
   workspace_root?: string;
   issue_tracker: {
-    type: "github";
-    repo: string;
+    provider: string;
+    repository: string;
+    base_url?: string;
     prs_as_request_surface: boolean;
   };
   vcs: {
@@ -27,20 +29,33 @@ type MachineConfig = {
 
 type SupportedVcs = "jj" | "git";
 
+type IssueKind = "issue" | "pull_request" | "merge_request";
+
 type IssueReference = {
-  provider: "github";
-  repo: string;
-  number: number;
-  kind: "issue" | "pull_request";
+  provider: string;
+  base_url: string;
+  repository: string;
+  kind: IssueKind;
+  id: string;
+  url?: string;
+  repo?: string;
+  number?: number;
 };
 
-type GitHubItem = {
-  number: number;
+type TrackedItem = {
+  ref: IssueReference;
   title: string;
-  body: string;
+  description: string;
   url: string;
   state: string;
-  kind: "issue" | "pull_request";
+  comments: TrackedItemComment[];
+  labels: string[];
+};
+
+type TrackedItemComment = {
+  author: string;
+  created_at: string;
+  body: string;
 };
 
 type TestAttempt = {
@@ -256,9 +271,12 @@ function doctorCommand({ json = false }: { json?: boolean } = {}): number {
   });
 
   let artifactRoot = DEFAULT_ARTIFACT_ROOT;
+  let configuredProvider = "";
   if (root && configExists) {
     try {
-      artifactRoot = readMachineConfig(root).artifact_root;
+      const config = readMachineConfig(root);
+      artifactRoot = config.artifact_root;
+      configuredProvider = config.issue_tracker.provider;
     } catch {
       artifactRoot = DEFAULT_ARTIFACT_ROOT;
     }
@@ -282,19 +300,33 @@ function doctorCommand({ json = false }: { json?: boolean } = {}): number {
     checks.push({ name, status: present ? "passed" : "warn", detail: present ? path : `${path} missing` });
   }
 
-  const ghPresent = commandExists("gh");
-  checks.push({
-    name: "recommended.gh",
-    status: ghPresent ? "passed" : "warn",
-    detail: doctorDetail(ghPresent ? "gh executable found" : "gh executable missing; GitHub issue start may fail"),
-  });
-  const ghAxiPresent = commandExists("gh-axi");
-  checks.push({
-    name: "recommended.gh-axi",
-    status: ghAxiPresent ? "passed" : "warn",
-    detail: doctorDetail(ghAxiPresent ? "gh-axi executable found" : "unchecked; run npx -y gh-axi --help when GitHub AXI operations are needed"),
-  });
-
+  if (configuredProvider === "github") {
+    const ghPresent = commandExists("gh");
+    checks.push({
+      name: "recommended.gh",
+      status: ghPresent ? "passed" : "warn",
+      detail: doctorDetail(ghPresent ? "gh executable found" : "gh executable missing; GitHub issue intake may fail"),
+    });
+    const ghAxiPresent = commandExists("gh-axi");
+    checks.push({
+      name: "recommended.gh-axi",
+      status: ghAxiPresent ? "passed" : "warn",
+      detail: doctorDetail(ghAxiPresent ? "gh-axi executable found" : "unchecked; run npx -y gh-axi --help when GitHub AXI operations are needed"),
+    });
+  } else if (configuredProvider === "gitlab") {
+    const glabPresent = commandExists("glab");
+    checks.push({
+      name: "recommended.glab",
+      status: glabPresent ? "passed" : "warn",
+      detail: doctorDetail(glabPresent ? "glab executable found" : "glab executable missing; GitLab issue intake may fail"),
+    });
+  } else if (configuredProvider) {
+    checks.push({
+      name: `recommended.${configuredProvider}`,
+      status: "warn",
+      detail: doctorDetail(`unsupported issue tracker provider: ${configuredProvider}`),
+    });
+  }
   const failedCount = checks.filter((check) => check.status === "failed").length;
   const warningCount = checks.filter((check) => check.status === "warn").length;
   const status = failedCount > 0 ? "failed" : warningCount > 0 ? "warn" : "passed";
@@ -337,8 +369,9 @@ function nextStepForDoctor(status: string, checks: DoctorCheck[]): string {
   if (firstFailed?.name === "core.repository" || firstFailed?.name === "core.vcs-repo") return "run inside a Jujutsu or Git repository";
   const firstWarn = checks.find((check) => check.status === "warn");
   if (firstWarn?.name === "recommended.jj") return "install jj when you want the recommended Slopflow workflow, or continue with Git";
-  if (firstWarn?.name === "recommended.gh") return "install gh or continue if GitHub start is not needed";
+  if (firstWarn?.name === "recommended.gh") return "install gh or continue if GitHub issue intake is not needed";
   if (firstWarn?.name === "recommended.gh-axi") return "run npx -y gh-axi --help when GitHub AXI operations are needed";
+  if (firstWarn?.name === "recommended.glab") return "install glab or continue if GitLab issue intake is not needed";
   return "inspect doctor checks";
 }
 
@@ -893,8 +926,8 @@ async function homeCommand(): Promise<number> {
     bin,
     description,
     state: "initialized",
-    repo: config.issue_tracker.repo,
-    issue_tracker: config.issue_tracker.type,
+    repo: config.issue_tracker.repository,
+    issue_tracker: config.issue_tracker.provider,
     vcs: config.vcs.type,
     "artifact-root": artifactRoot,
     "current-vcs-state": readCurrentVcsState(root, config.vcs.type),
@@ -915,9 +948,7 @@ function completeCommand(args: string[]): number {
   if (!issueId) {
     throw new SlopflowError("Missing issue id.", "Run `slopflow complete <issue-id>`.", 2);
   }
-  if (!/^\d+$/.test(issueId)) {
-    throw new SlopflowError("Issue id must be a plain number for the configured repository.", undefined, 2);
-  }
+  assertSafeWorkKey(issueId);
 
   const executionRoot = findRepoRoot(process.cwd());
   if (!executionRoot) {
@@ -926,50 +957,50 @@ function completeCommand(args: string[]): number {
   const pointer = readAttemptPointer(executionRoot);
   const root = pointer?.canonical_repository ?? executionRoot;
   const config = readMachineConfig(root);
-  const workDir = join(root, config.artifact_root, issueId);
+  const workDir = resolveWorkDir(root, config, issueId);
   const workStatusPath = join(workDir, "status.json");
   const workStatus = readWorkStatus(workDir, issueId, "complete");
   const issue = workStatus.issue;
-  const issueText = `${issue.provider}:${issue.repo}#${issue.number}`;
+  const issueTextValue = issueText(issue);
   const workspaceBlock = promotedWorkspaceBlock(workStatus, executionRoot, issueId, "complete");
-  if (workspaceBlock) return completeBlocked(issueText, workspaceBlock.reason, workspaceBlock.nextStep, workDir);
+  if (workspaceBlock) return completeBlocked(issueTextValue, workspaceBlock.reason, workspaceBlock.nextStep, workDir);
 
   return withArtifactLock({ scope: "work", lockPath: issueWorkLockPath(workDir), force, command: "slopflow complete" }, () => {
 
   if (workStatus.status === "cancelled") {
-    return completeBlocked(issueText, "issue work is cancelled", `inspect ${relativeToCwd(join(workDir, "cancel-note.md"))} or start new work`, workDir);
+    return completeBlocked(issueTextValue, "issue work is cancelled", `inspect ${relativeToCwd(join(workDir, "cancel-note.md"))} or start new work`, workDir);
   }
 
   const contractPath = join(workDir, "contract.md");
   if (!existsSync(contractPath)) {
-    return completeBlocked(issueText, "missing contract.md", "restore contract.md or rerun slopflow start", workDir);
+    return completeBlocked(issueTextValue, "missing contract.md", "restore contract.md or rerun slopflow start", workDir);
   }
   if (!isVcsStatusReadable(executionRoot, config.vcs.type)) {
-    return completeBlocked(issueText, `${config.vcs.type} status is not readable`, `fix ${vcsDisplayName(config.vcs.type)} repository state`, workDir);
+    return completeBlocked(issueTextValue, `${config.vcs.type} status is not readable`, `fix ${vcsDisplayName(config.vcs.type)} repository state`, workDir);
   }
 
   const reviewPath = join(workDir, "review.json");
   if (!existsSync(reviewPath)) {
-    return completeBlocked(issueText, "missing review verdict", `slopflow review ${issueId}`, workDir);
+    return completeBlocked(issueTextValue, "missing review verdict", `slopflow review ${issueId}`, workDir);
   }
   const reviewValidation = readAndValidateReviewVerdict(reviewPath);
   if (!reviewValidation.ok) {
-    return completeBlocked(issueText, "invalid review verdict", "fix review.json", workDir);
+    return completeBlocked(issueTextValue, "invalid review verdict", "fix review.json", workDir);
   }
   if (reviewValidation.verdict.verdict !== "complete") {
-    return completeBlocked(issueText, "review verdict is changes-requested", "address required changes", workDir);
+    return completeBlocked(issueTextValue, "review verdict is changes-requested", "address required changes", workDir);
   }
 
   const evidenceGate = evaluateCompletionEvidence(workDir);
   if (!evidenceGate.ok) {
-    return completeBlocked(issueText, evidenceGate.reason, evidenceGate.nextStep, workDir);
+    return completeBlocked(issueTextValue, evidenceGate.reason, evidenceGate.nextStep, workDir);
   }
 
   const completionNotePath = join(workDir, "completion-note.md");
   if (!existsSync(completionNotePath)) {
     writeFileSync(
       completionNotePath,
-      buildCompletionNote({ issue: issueText, testsStatus: evidenceGate.testsStatus, review: reviewValidation.verdict, workDir }),
+      buildCompletionNote({ issue: issueTextValue, testsStatus: evidenceGate.testsStatus, review: reviewValidation.verdict, workDir }),
       "utf8",
     );
   }
@@ -979,7 +1010,7 @@ function completeCommand(args: string[]): number {
 
   printBlock("complete", {
     status: "complete",
-    issue: issueText,
+    issue: issueTextValue,
     tests: evidenceGate.testsStatus,
     review: "complete",
     "completion-note": relativeToCwd(completionNotePath),
@@ -1075,9 +1106,7 @@ function reviewCommand(args: string[]): number {
   if (!issueId) {
     throw new SlopflowError("Missing issue id.", "Run `slopflow review <issue-id>`.", 2);
   }
-  if (!/^\d+$/.test(issueId)) {
-    throw new SlopflowError("Issue id must be a plain number for the configured repository.", undefined, 2);
-  }
+  assertSafeWorkKey(issueId);
 
   const executionRoot = findRepoRoot(process.cwd());
   if (!executionRoot) {
@@ -1086,14 +1115,14 @@ function reviewCommand(args: string[]): number {
   const pointer = readAttemptPointer(executionRoot);
   const root = pointer?.canonical_repository ?? executionRoot;
   const config = readMachineConfig(root);
-  const workDir = join(root, config.artifact_root, issueId);
+  const workDir = resolveWorkDir(root, config, issueId);
   const workStatus = readWorkStatus(workDir, issueId, "review");
   const issue = workStatus.issue;
   const workspaceBlock = promotedWorkspaceBlock(workStatus, executionRoot, issueId, "review");
   if (workspaceBlock) {
     printBlock("review", {
       status: "blocked",
-      issue: `${issue.provider}:${issue.repo}#${issue.number}`,
+      issue: issueText(issue),
       reason: workspaceBlock.reason,
       "execution-workspace": workspaceBlock.workspace,
       "next-step": workspaceBlock.nextStep,
@@ -1112,7 +1141,7 @@ function reviewCommand(args: string[]): number {
   if (!existsSync(reviewPath)) {
     printBlock("review", {
       status: "pending",
-      issue: `${issue.provider}:${issue.repo}#${issue.number}`,
+      issue: issueText(issue),
       packet: relativeToCwd(packetPath),
       verdict: "missing",
       "test-evidence": testEvidenceStatus,
@@ -1125,7 +1154,7 @@ function reviewCommand(args: string[]): number {
   if (!validation.ok) {
     printBlock("review", {
       status: "blocked",
-      issue: `${issue.provider}:${issue.repo}#${issue.number}`,
+      issue: issueText(issue),
       packet: relativeToCwd(packetPath),
       verdict: "invalid",
       "test-evidence": testEvidenceStatus,
@@ -1138,7 +1167,7 @@ function reviewCommand(args: string[]): number {
   const verdict = validation.verdict.verdict;
   printBlock("review", {
     status: verdict === "complete" ? "complete" : "changes-requested",
-    issue: `${issue.provider}:${issue.repo}#${issue.number}`,
+    issue: issueText(issue),
     packet: relativeToCwd(packetPath),
     verdict,
     "test-evidence": testEvidenceStatus,
@@ -1172,7 +1201,7 @@ function testCommand(args: string[]): number {
   }
   const root = pointer?.canonical_repository ?? executionRoot;
   const config = readMachineConfig(root);
-  const workDir = join(root, config.artifact_root, issueId);
+  const workDir = resolveWorkDir(root, config, issueId);
   const workStatus = readWorkStatus(workDir, issueId, "test");
   const targetDir = agentAttemptId ? join(workDir, "attempts", agentAttemptId) : workDir;
   if (agentAttemptId) readAttemptOrThrow(join(workDir, "attempts"), agentAttemptId);
@@ -1238,7 +1267,7 @@ function testCommand(args: string[]): number {
 
   printBlock("test", {
     status,
-    issue: `${workStatus.issue.provider}:${workStatus.issue.repo}#${workStatus.issue.number}`,
+    issue: issueText(workStatus.issue),
     gate: gateName,
     command: commandText,
     "exit-code": exitCode,
@@ -1597,7 +1626,7 @@ function readAttemptContext(issueId: string): { root: string; workDir: string; a
     throw new SlopflowError("Could not find a repository root.", "Run Slopflow inside an initialized repository.", 2);
   }
   const config = readMachineConfig(root);
-  const workDir = join(root, config.artifact_root, issueId);
+  const workDir = resolveWorkDir(root, config, issueId);
   const workStatus = readWorkStatus(workDir, issueId, "attempt");
   return { root, workDir, attemptsRoot: join(workDir, "attempts"), workStatus };
 }
@@ -1606,9 +1635,7 @@ function parseIssueIdArg(issueId: string | undefined, usage: string): string {
   if (!issueId) {
     throw new SlopflowError("Missing issue id.", `Run \`${usage}\`.`, 2);
   }
-  if (!/^\d+$/.test(issueId)) {
-    throw new SlopflowError("Issue id must be a plain number for the configured repository.", undefined, 2);
-  }
+  assertSafeWorkKey(issueId);
   return issueId;
 }
 
@@ -1846,7 +1873,8 @@ function validateAgentAttempt(value: unknown, path: string): AgentAttempt {
 }
 
 function issueText(issue: IssueReference): string {
-  return `${issue.provider}:${issue.repo}#${issue.number}`;
+  const normalized = normalizeIssueReference(issue);
+  return `${normalized.provider}:${normalized.repository} ${normalized.kind} ${normalized.id}`;
 }
 
 function nextStepForAttempt(issueId: string, attempt: AgentAttempt, attemptDir: string): string {
@@ -1866,7 +1894,7 @@ function buildAttemptGoalPrompt(issue: IssueReference, attemptId: string, worksp
     `Do not edit other attempts or fabricate Slopflow artifacts.\n\n` +
     `Before submitting, write \`summary.md\` in this attempt directory.\n\n` +
     `When ready, run:\n\n` +
-    `\`\`\`bash\nslopflow attempt submit ${issue.number} ${attemptId}\n\`\`\`\n`;
+    `\`\`\`bash\nslopflow attempt submit ${issue.id ?? issue.number} ${attemptId}\n\`\`\`\n`;
 }
 
 function buildAttemptAbandonNote(issue: IssueReference, attemptId: string, reason: string, timestamp: string): string {
@@ -1883,7 +1911,7 @@ function lifecycleCommand(action: "pause" | "resume" | "cancel", args: string[])
   const reason = action === "resume" ? undefined : parseReasonArg(args.slice(1), action);
   const { root, workDir, workStatus, statusPath } = readLifecycleContext(issueId, action);
   const issue = workStatus.issue;
-  const issueText = `${issue.provider}:${issue.repo}#${issue.number}`;
+  const issueTextValue = issueText(issue);
   const now = new Date().toISOString();
 
   return withArtifactLock({ scope: "work", lockPath: issueWorkLockPath(workDir), force, command: `slopflow ${action}` }, () => {
@@ -1896,11 +1924,11 @@ function lifecycleCommand(action: "pause" | "resume" | "cancel", args: string[])
       throw new SlopflowError("Complete issue work cannot be paused.", `Inspect ${relativeToCwd(join(workDir, "completion-note.md"))}.`, 2);
     }
     const pauseNotePath = join(workDir, "pause-note.md");
-    writeFileSync(pauseNotePath, buildLifecycleNote("Pause", issueText, reason!, now), "utf8");
+    writeFileSync(pauseNotePath, buildLifecycleNote("Pause", issueTextValue, reason!, now), "utf8");
     writeJson(statusPath, { ...workStatus, status: "paused", paused_at: now, pause_reason: reason });
     printBlock("pause", {
       status: "paused",
-      issue: issueText,
+      issue: issueTextValue,
       "pause-note": relativeToCwd(pauseNotePath),
       "next-step": `slopflow resume ${issueId}`,
     });
@@ -1912,11 +1940,11 @@ function lifecycleCommand(action: "pause" | "resume" | "cancel", args: string[])
       throw new SlopflowError("Complete issue work cannot be cancelled.", `Inspect ${relativeToCwd(join(workDir, "completion-note.md"))}.`, 2);
     }
     const cancelNotePath = join(workDir, "cancel-note.md");
-    writeFileSync(cancelNotePath, buildLifecycleNote("Cancel", issueText, reason!, now), "utf8");
+    writeFileSync(cancelNotePath, buildLifecycleNote("Cancel", issueTextValue, reason!, now), "utf8");
     writeJson(statusPath, { ...workStatus, status: "cancelled", cancelled_at: now, cancel_reason: reason });
     printBlock("cancel", {
       status: "cancelled",
-      issue: issueText,
+      issue: issueTextValue,
       "cancel-note": relativeToCwd(cancelNotePath),
       artifacts: "preserved",
       "next-step": "inspect artifacts or manually abandon related VCS work if desired",
@@ -1937,7 +1965,7 @@ function lifecycleCommand(action: "pause" | "resume" | "cancel", args: string[])
   const config = readMachineConfig(root);
   printBlock("resume", {
     status: wasPaused ? "active" : String(workStatus.status ?? "active"),
-    issue: issueText,
+    issue: issueTextValue,
     contract: relativeToCwd(join(workDir, "contract.md")),
     tests: testsSummary,
     review: reviewStatus,
@@ -1954,15 +1982,13 @@ function readLifecycleContext(issueId: string | undefined, command: "pause" | "r
   if (!issueId) {
     throw new SlopflowError("Missing issue id.", `Run \`slopflow ${command} <issue-id>${command === "resume" ? "" : " --reason <text>"}\`.`, 2);
   }
-  if (!/^\d+$/.test(issueId)) {
-    throw new SlopflowError("Issue id must be a plain number for the configured repository.", undefined, 2);
-  }
+  assertSafeWorkKey(issueId);
   const root = findRepoRoot(process.cwd());
   if (!root) {
     throw new SlopflowError("Could not find a repository root.", "Run Slopflow inside an initialized repository.", 2);
   }
   const config = readMachineConfig(root);
-  const workDir = join(root, config.artifact_root, issueId);
+  const workDir = resolveWorkDir(root, config, issueId);
   const statusPath = join(workDir, "status.json");
   return { root, workDir, statusPath, workStatus: readWorkStatus(workDir, issueId, command) };
 }
@@ -2008,6 +2034,42 @@ function nextStepForWork(issueId: string, workDir: string, reviewStatus: string,
   return `slopflow complete ${issueId}`;
 }
 
+function resolveWorkDir(root: string, config: MachineConfig, issueId: string): string {
+  assertSafeWorkKey(issueId);
+  const direct = join(root, config.artifact_root, issueId);
+  if (existsSync(direct)) return direct;
+  const workRoot = join(root, config.artifact_root);
+  const matches: string[] = [];
+  for (const entry of readdirSyncSafe(workRoot)) {
+    const candidate = join(workRoot, entry);
+    const statusPath = join(candidate, "status.json");
+    if (!existsSync(statusPath)) continue;
+    try {
+      const status = readJson(statusPath) as { issue?: IssueReference; work_key?: string };
+      const issue = normalizeIssueReference(status.issue);
+      if (status.work_key === issueId) return candidate;
+      if (issue.id === issueId || issue.number === Number(issueId)) matches.push(candidate);
+    } catch {
+      continue;
+    }
+  }
+  if (matches.length === 1) return matches[0]!;
+  if (matches.length > 1) {
+    throw new SlopflowError(
+      `Issue id ${issueId} matches multiple work directories.`,
+      "Use the full Slopflow work key instead.",
+      2,
+    );
+  }
+  return direct;
+}
+
+function assertSafeWorkKey(value: string): void {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value)) {
+    throw new SlopflowError("Issue id or work key contains unsafe characters.", "Use a Slopflow work key or provider-native issue id.", 2);
+  }
+}
+
 function readWorkStatus(workDir: string, issueId: string, command: "test" | "review" | "complete" | "pause" | "resume" | "cancel" | "attempt"): WorkStatus {
   const workStatusPath = join(workDir, "status.json");
   if (!existsSync(workStatusPath)) {
@@ -2043,9 +2105,7 @@ function parseTestArgs(args: string[]): { issueId: string; gateName: string; com
   if (!issueId) {
     throw new SlopflowError("Missing issue id.", "Run `slopflow test <issue-id> --name <gate> -- <command...>`.", 2);
   }
-  if (!/^\d+$/.test(issueId)) {
-    throw new SlopflowError("Issue id must be a plain number for the configured repository.", undefined, 2);
-  }
+  assertSafeWorkKey(issueId);
   const separatorIndex = args.indexOf("--");
   if (separatorIndex === -1) {
     throw new SlopflowError("Missing `--` before wrapped command.", "Run `slopflow test <issue-id> --name <gate> -- <command...>`.", 2);
@@ -2076,15 +2136,7 @@ function parseTestArgs(args: string[]): { issueId: string; gateName: string; com
 }
 
 function startCommand(args: string[]): number {
-  const issueId = args[0];
   const force = args.includes("--force");
-  if (!issueId) {
-    throw new SlopflowError("Missing issue id.", "Run `slopflow start <issue-id>`.", 2);
-  }
-  if (!/^\d+$/.test(issueId)) {
-    throw new SlopflowError("Issue id must be a plain number for the configured repository.", undefined, 2);
-  }
-
   const root = findRepoRoot(process.cwd());
   if (!root) {
     throw new SlopflowError(
@@ -2094,59 +2146,58 @@ function startCommand(args: string[]): number {
     );
   }
   const config = readMachineConfig(root);
-  if (config.issue_tracker.type !== "github") {
-    throw new SlopflowError("Unsupported issue tracker.", "Slopflow v0 start only supports GitHub.", 2);
+  const reference = parseStartReference(args, config);
+  if (reference.kind !== "issue") {
+    throw new SlopflowError(
+      `Unsupported tracked item kind: ${reference.kind}.`,
+      "Issue intake currently supports kind=issue.",
+      2,
+    );
   }
 
-  const issueNumber = Number(issueId);
-  const item = fetchGitHubItem(config.issue_tracker.repo, issueNumber);
-  const issueReference: IssueReference = {
-    provider: "github",
-    repo: config.issue_tracker.repo,
-    number: item.number,
-    kind: item.kind,
-  };
-  const workDir = join(root, config.artifact_root, String(issueNumber));
+  const item = readTrackedItem(reference);
+  const workKey = buildWorkKey(item.ref);
+  const workDir = join(root, config.artifact_root, workKey);
   const statusPath = join(workDir, "status.json");
   const workDirExisted = existsSync(workDir);
 
   mkdirSync(workDir, { recursive: true });
   return withArtifactLock({ scope: "work", lockPath: issueWorkLockPath(workDir), force, command: "slopflow start" }, () => {
-
-  let action = "created";
-  if (existsSync(statusPath)) {
-    const existing = readJson(statusPath) as { issue?: IssueReference };
-    if (stableStringify(existing.issue) !== stableStringify(issueReference)) {
-      throw new SlopflowError(
-        `Work directory already exists for a different issue reference: ${relativeToCwd(workDir)}`,
-        "Slopflow will not overwrite issue work automatically.",
-        2,
-      );
-    }
-    action = "unchanged";
-  } else if (workDirExisted && (!force || readdirSyncSafe(workDir).some((entry) => entry !== "locks"))) {
+    let action = "created";
+    if (existsSync(statusPath)) {
+      const existing = readJson(statusPath) as { issue?: IssueReference };
+      if (stableStringify(normalizeIssueReference(existing.issue)) !== stableStringify(item.ref)) {
+        throw new SlopflowError(
+          `Work directory already exists for a different issue reference: ${relativeToCwd(workDir)}`,
+          "Slopflow will not overwrite issue work automatically.",
+          2,
+        );
+      }
+      action = "unchanged";
+    } else if (workDirExisted && (!force || readdirSyncSafe(workDir).some((entry) => entry !== "locks"))) {
       throw new SlopflowError(
         `Work directory already exists without status metadata: ${relativeToCwd(workDir)}`,
         "Move it aside or inspect it before retrying.",
         2,
       );
-  } else {
-    const artifacts = buildStartArtifacts({ issue: item, issueReference, workDir, root });
-    for (const [filename, content] of Object.entries(artifacts)) {
-      writeFileSync(join(workDir, filename), content, "utf8");
+    } else {
+      const artifacts = buildStartArtifacts({ item, workKey, workDir, root });
+      for (const [filename, content] of Object.entries(artifacts)) {
+        writeFileSync(join(workDir, filename), content, "utf8");
+      }
     }
-  }
 
-  printBlock("start", {
-    status: action,
-    issue: `github:${issueReference.repo}#${issueReference.number}`,
-    kind: issueReference.kind,
-    "work-directory": relativeToCwd(workDir),
-    contract: relativeToCwd(join(workDir, "contract.md")),
-    "goal-prompt": relativeToCwd(join(workDir, "goal-prompt.md")),
-    "next-step": `create goal mirror from ${relativeToCwd(join(workDir, "goal-prompt.md"))}`,
-  });
-  return 0;
+    printBlock("start", {
+      status: action,
+      issue: issueText(item.ref),
+      kind: item.ref.kind,
+      "work-key": workKey,
+      "work-directory": relativeToCwd(workDir),
+      contract: relativeToCwd(join(workDir, "contract.md")),
+      "goal-prompt": relativeToCwd(join(workDir, "goal-prompt.md")),
+      "next-step": `create goal mirror from ${relativeToCwd(join(workDir, "goal-prompt.md"))}`,
+    });
+    return 0;
   });
 }
 
@@ -2209,8 +2260,8 @@ async function statusCommand({ json = false }: { json?: boolean } = {}): Promise
 
   const status = {
     state: "initialized",
-    repo: config.issue_tracker.repo,
-    issue_tracker: config.issue_tracker.type,
+    repo: config.issue_tracker.repository,
+    issue_tracker: config.issue_tracker.provider,
     vcs: config.vcs.type,
     "artifact-root": artifactRoot,
     "current-vcs-state": currentVcsState,
@@ -2232,53 +2283,204 @@ function readMachineConfig(root: string): MachineConfig {
   if (!existsSync(configPath)) {
     throw new SlopflowError("Slopflow machine config is missing.", "Run `slopflow init` first.", 2);
   }
-  const config = readJson(configPath) as Partial<MachineConfig>;
-  if (!config.artifact_root || !config.issue_tracker?.type || !config.issue_tracker.repo || !config.vcs?.type) {
+  const raw = readJson(configPath) as {
+    schema_version?: number;
+    artifact_root?: string;
+    workspace_root?: string;
+    issue_tracker?: {
+      type?: string;
+      provider?: string;
+      repo?: string;
+      repository?: string;
+      base_url?: string;
+      prs_as_request_surface?: boolean;
+    };
+    vcs?: { type?: string };
+  };
+  const provider = raw.issue_tracker?.provider ?? raw.issue_tracker?.type;
+  const repository = raw.issue_tracker?.repository ?? raw.issue_tracker?.repo;
+  if (!raw.artifact_root || !provider || !repository || !raw.vcs?.type) {
     throw new SlopflowError("Slopflow machine config is incomplete.", "Run `slopflow init --force` to refresh it.", 2);
   }
-  return config as MachineConfig;
+  return {
+    schema_version: raw.schema_version ?? SCHEMA_VERSION,
+    artifact_root: raw.artifact_root,
+    ...(raw.workspace_root ? { workspace_root: raw.workspace_root } : {}),
+    issue_tracker: {
+      provider,
+      repository,
+      base_url: normalizeBaseUrl(raw.issue_tracker?.base_url ?? defaultBaseUrl(provider)),
+      prs_as_request_surface: raw.issue_tracker?.prs_as_request_surface ?? DEFAULT_PRS_AS_REQUEST_SURFACE,
+    },
+    vcs: { type: raw.vcs.type },
+  };
 }
 
-function fetchGitHubItem(repo: string, number: number): GitHubItem {
-  const issueArgs = ["issue", "view", String(number), "--repo", repo, "--json", "number,title,body,url,state"];
+function parseStartReference(args: string[], config: MachineConfig): IssueReference {
+  const flagNames = new Set(["--provider", "--repository", "--base-url", "--kind", "--id"]);
+  const positional = args.filter((arg, index) => !arg.startsWith("--") && !flagNames.has(args[index - 1] ?? ""));
+  const id = flagValue(args, "--id") ?? positional[0];
+  if (!id) {
+    throw new SlopflowError("Missing issue id.", "Run `slopflow start <issue-id>`.", 2);
+  }
+  const provider = flagValue(args, "--provider") ?? config.issue_tracker.provider;
+  const repository = flagValue(args, "--repository") ?? config.issue_tracker.repository;
+  const kind = (flagValue(args, "--kind") ?? "issue") as IssueKind;
+  return normalizeIssueReference({
+    provider,
+    base_url: normalizeBaseUrl(flagValue(args, "--base-url") ?? config.issue_tracker.base_url ?? defaultBaseUrl(provider)),
+    repository,
+    kind,
+    id,
+  });
+}
+
+function flagValue(args: string[], name: string): string | undefined {
+  const index = args.indexOf(name);
+  return index >= 0 ? args[index + 1] : undefined;
+}
+
+function normalizeIssueReference(value: unknown): IssueReference {
+  const issue = value as Partial<IssueReference> | undefined;
+  const provider = issue?.provider ?? "";
+  const repository = issue?.repository ?? issue?.repo ?? "";
+  const id = issue?.id ?? (typeof issue?.number === "number" ? String(issue.number) : "");
+  const kind = issue?.kind ?? "issue";
+  const baseUrl = normalizeBaseUrl(issue?.base_url ?? defaultBaseUrl(provider));
+  return {
+    provider,
+    base_url: baseUrl,
+    repository,
+    kind,
+    id,
+    ...(issue?.url ? { url: issue.url } : {}),
+    ...(issue?.repo ? { repo: issue.repo } : provider === "github" ? { repo: repository } : {}),
+    ...(typeof issue?.number === "number" ? { number: issue.number } : provider === "github" && /^\d+$/.test(id) ? { number: Number(id) } : {}),
+  };
+}
+
+function defaultBaseUrl(provider: string): string {
+  if (provider === "github") return "https://github.com";
+  if (provider === "gitlab") return "https://gitlab.com";
+  return "";
+}
+
+function normalizeBaseUrl(value: string): string {
+  if (!value) return "";
+  try {
+    const url = new URL(value);
+    url.protocol = url.protocol.toLowerCase();
+    url.hostname = url.hostname.toLowerCase();
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return value.toLowerCase().replace(/\/$/, "");
+  }
+}
+
+function buildWorkKey(reference: IssueReference): string {
+  const normalized = normalizeIssueReference(reference);
+  const slug = slugifyWorkKey([normalized.provider, normalized.repository, normalized.kind, normalized.id].join("-"));
+  const hash = createHash("sha256")
+    .update(stableStringify({
+      provider: normalized.provider,
+      base_url: normalized.base_url,
+      repository: normalized.repository,
+      kind: normalized.kind,
+      id: normalized.id,
+    }))
+    .digest("hex")
+    .slice(0, 8);
+  return `${slug}-${hash}`;
+}
+
+function slugifyWorkKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "issue";
+}
+
+function readTrackedItem(reference: IssueReference): TrackedItem {
+  if (reference.provider === "github") return fetchGitHubTrackedItem(reference);
+  if (reference.provider === "gitlab") return fetchGitLabTrackedItem(reference);
+  throw new SlopflowError(
+    `Unsupported issue tracker provider: ${reference.provider}.`,
+    "Configure a supported issue tracker provider.",
+    2,
+  );
+}
+
+function fetchGitHubTrackedItem(reference: IssueReference): TrackedItem {
+  const fields = "number,title,body,url,state,comments,labels";
+  const issueArgs = ["issue", "view", reference.id, "--repo", reference.repository, "--json", fields];
   const issue = runGhJson(issueArgs);
   if (issue.ok) {
-    return normalizeGitHubItem(issue.value, "issue");
+    return normalizeGitHubTrackedItem(issue.value, { ...reference, kind: "issue" });
   }
   if (!issue.notFound) {
     throw githubCommandError(issue);
   }
 
-  const prArgs = ["pr", "view", String(number), "--repo", repo, "--json", "number,title,body,url,state"];
+  const prArgs = ["pr", "view", reference.id, "--repo", reference.repository, "--json", fields];
   const pr = runGhJson(prArgs);
   if (pr.ok) {
-    return normalizeGitHubItem(pr.value, "pull_request");
+    return normalizeGitHubTrackedItem(pr.value, { ...reference, kind: "pull_request" });
   }
   if (!pr.notFound) {
     throw githubCommandError(pr);
   }
   throw new SlopflowError(
-    `Could not read GitHub issue or PR #${number} from ${repo}.`,
+    `Could not read GitHub issue or PR ${reference.id} from ${reference.repository}.`,
     "Ensure the issue or PR exists in the configured repository.",
     2,
     {
       command: `gh ${issueArgs.join(" ")} && gh ${prArgs.join(" ")}`,
       "exit-code": pr.exitCode,
       detail: summarizeCommandFailure(pr),
-      "next-step": `verify #${number} exists in ${repo}`,
+      "next-step": `verify ${reference.id} exists in ${reference.repository}`,
     },
   );
 }
 
-type GhJsonResult =
-  | { ok: true; value: unknown }
-  | { ok: false; args: string[]; exitCode: number | string; stdout: string; stderr: string; message: string; notFound: boolean; spawnError?: string };
+function fetchGitLabTrackedItem(reference: IssueReference): TrackedItem {
+  const encodedProject = encodeURIComponent(reference.repository);
+  const hostArgs = gitLabHostArgs(reference.base_url);
+  const issue = runGlabJson([...hostArgs, "api", `projects/${encodedProject}/issues/${encodeURIComponent(reference.id)}`]);
+  if (!issue.ok) {
+    throw gitlabCommandError(issue);
+  }
+  const notes = runGlabJson([...hostArgs, "api", `projects/${encodedProject}/issues/${encodeURIComponent(reference.id)}/notes?per_page=100&order_by=created_at&sort=asc`]);
+  if (!notes.ok) {
+    throw gitlabCommandError(notes);
+  }
+  return normalizeGitLabTrackedItem(issue.value, notes.value, reference);
+}
 
-function runGhJson(args: string[]): GhJsonResult {
-  const result = spawnSync("gh", args, { encoding: "utf8" });
+function gitLabHostArgs(baseUrl: string): string[] {
+  const defaultUrl = normalizeBaseUrl(defaultBaseUrl("gitlab"));
+  if (!baseUrl || normalizeBaseUrl(baseUrl) === defaultUrl) return [];
+  try {
+    return ["--hostname", new URL(baseUrl).host];
+  } catch {
+    return [];
+  }
+}
+
+type ProviderJsonResult =
+  | { ok: true; value: unknown }
+  | { ok: false; tool: string; args: string[]; exitCode: number | string; stdout: string; stderr: string; message: string; notFound: boolean; spawnError?: string };
+
+function runGhJson(args: string[]): ProviderJsonResult {
+  return runProviderJson("gh", args, "GitHub");
+}
+
+function runGlabJson(args: string[]): ProviderJsonResult {
+  return runProviderJson("glab", args, "GitLab");
+}
+
+function runProviderJson(tool: string, args: string[], providerName: string): ProviderJsonResult {
+  const result = spawnSync(tool, args, { encoding: "utf8" });
   if (result.error) {
     return {
       ok: false,
+      tool,
       args,
       exitCode: "spawn-error",
       stdout: result.stdout ?? "",
@@ -2293,11 +2495,12 @@ function runGhJson(args: string[]): GhJsonResult {
     const stderr = result.stderr ?? "";
     return {
       ok: false,
+      tool,
       args,
       exitCode: typeof result.status === "number" ? result.status : 1,
       stdout,
       stderr,
-      message: summarizeText(stderr || stdout || "gh command failed"),
+      message: summarizeText(stderr || stdout || `${tool} command failed`),
       notFound: isLikelyNotFound(stdout, stderr),
     };
   }
@@ -2306,33 +2509,48 @@ function runGhJson(args: string[]): GhJsonResult {
   } catch (error) {
     return {
       ok: false,
+      tool,
       args,
       exitCode: 0,
       stdout: result.stdout ?? "",
       stderr: result.stderr ?? "",
-      message: error instanceof Error ? error.message : "GitHub JSON parse failed",
+      message: error instanceof Error ? error.message : `${providerName} JSON parse failed`,
       notFound: false,
     };
   }
 }
 
-function githubCommandError(failure: Exclude<GhJsonResult, { ok: true }>): SlopflowError {
+function githubCommandError(failure: Exclude<ProviderJsonResult, { ok: true }>): SlopflowError {
   return new SlopflowError(
     "GitHub command failed while reading issue work.",
-    nextStepForGithubFailure(failure),
+    nextStepForProviderFailure(failure, "GitHub"),
     2,
     {
-      command: `gh ${failure.args.join(" ")}`,
+      command: `${failure.tool} ${failure.args.join(" ")}`,
       "exit-code": failure.exitCode,
       detail: summarizeCommandFailure(failure),
-      "next-step": nextStepForGithubFailure(failure),
+      "next-step": nextStepForProviderFailure(failure, "GitHub"),
     },
   );
 }
 
-function summarizeCommandFailure(failure: Exclude<GhJsonResult, { ok: true }>): string {
+function gitlabCommandError(failure: Exclude<ProviderJsonResult, { ok: true }>): SlopflowError {
+  return new SlopflowError(
+    "GitLab command failed while reading issue work.",
+    nextStepForProviderFailure(failure, "GitLab"),
+    2,
+    {
+      command: `${failure.tool} ${failure.args.join(" ")}`,
+      "exit-code": failure.exitCode,
+      detail: summarizeCommandFailure(failure),
+      "next-step": nextStepForProviderFailure(failure, "GitLab"),
+    },
+  );
+}
+
+function summarizeCommandFailure(failure: Exclude<ProviderJsonResult, { ok: true }>): string {
   const parts = [failure.message, summarizeText(failure.stderr), summarizeText(failure.stdout)].filter(Boolean);
-  return parts.length > 0 ? parts.join(" | ") : "gh command failed";
+  return parts.length > 0 ? parts.join(" | ") : `${failure.tool} command failed`;
 }
 
 function summarizeText(value: string, limit = 300): string {
@@ -2350,52 +2568,151 @@ function isLikelyAuthFailure(stdout: string, stderr: string): boolean {
   return /auth|authentication|authorize|login|401|403|forbidden|permission/i.test(`${stdout}\n${stderr}`);
 }
 
-function nextStepForGithubFailure(failure: Exclude<GhJsonResult, { ok: true }>): string {
+function nextStepForProviderFailure(failure: Exclude<ProviderJsonResult, { ok: true }>, providerName: "GitHub" | "GitLab"): string {
+  const tool = providerName === "GitHub" ? "gh" : "glab";
   if (failure.spawnError) {
-    return "install GitHub CLI `gh` and ensure it is on PATH";
+    return `install ${providerName} CLI \`${tool}\` and ensure it is on PATH`;
   }
   if (isLikelyAuthFailure(failure.stdout, failure.stderr)) {
-    return "gh auth login";
+    return `${tool} auth login`;
   }
   if (failure.exitCode === 0) {
-    return "inspect gh JSON output or update GitHub response parsing";
+    return `inspect ${tool} JSON output or update ${providerName} response parsing`;
   }
-  return "inspect gh output and retry";
+  return `inspect ${tool} output and retry`;
 }
 
-function normalizeGitHubItem(value: unknown, kind: GitHubItem["kind"]): GitHubItem {
-  const item = value as Partial<GitHubItem>;
+function normalizeGitHubTrackedItem(value: unknown, reference: IssueReference): TrackedItem {
+  const item = value as {
+    number?: unknown;
+    title?: unknown;
+    body?: unknown;
+    url?: unknown;
+    state?: unknown;
+    comments?: unknown;
+    labels?: unknown;
+  };
   if (typeof item.number !== "number" || typeof item.title !== "string") {
     throw new SlopflowError("GitHub returned an unexpected issue shape.", undefined, 2);
   }
-  return {
+  const ref = normalizeIssueReference({
+    ...reference,
+    id: String(item.number),
+    url: typeof item.url === "string" ? item.url : reference.url,
+    repo: reference.repository,
     number: item.number,
+  });
+  return {
+    ref,
     title: item.title,
-    body: typeof item.body === "string" ? item.body : "",
-    url: typeof item.url === "string" ? item.url : "",
+    description: typeof item.body === "string" ? item.body : "",
+    url: ref.url ?? "",
     state: typeof item.state === "string" ? item.state : "unknown",
-    kind,
+    comments: normalizeProviderComments(item.comments),
+    labels: normalizeProviderLabels(item.labels),
   };
 }
 
+function normalizeGitLabTrackedItem(value: unknown, notes: unknown, reference: IssueReference): TrackedItem {
+  const item = value as {
+    iid?: unknown;
+    title?: unknown;
+    description?: unknown;
+    web_url?: unknown;
+    state?: unknown;
+    labels?: unknown;
+  };
+  if ((typeof item.iid !== "number" && typeof item.iid !== "string") || typeof item.title !== "string") {
+    throw new SlopflowError("GitLab returned an unexpected issue shape.", undefined, 2);
+  }
+  const ref = normalizeIssueReference({
+    ...reference,
+    id: String(item.iid),
+    url: typeof item.web_url === "string" ? item.web_url : reference.url,
+  });
+  return {
+    ref,
+    title: item.title,
+    description: typeof item.description === "string" ? item.description : "",
+    url: ref.url ?? "",
+    state: typeof item.state === "string" ? item.state : "unknown",
+    comments: normalizeProviderComments(notes),
+    labels: normalizeProviderLabels(item.labels),
+  };
+}
+
+function normalizeProviderComments(value: unknown): TrackedItemComment[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((comment) => {
+      const entry = comment as {
+        body?: unknown;
+        createdAt?: unknown;
+        created_at?: unknown;
+        author?: unknown;
+        user?: unknown;
+        system?: unknown;
+      };
+      if (entry.system === true || typeof entry.body !== "string" || entry.body.trim().length === 0) return null;
+      const author = entry.author as { login?: unknown; username?: unknown; name?: unknown } | string | undefined;
+      const user = entry.user as { login?: unknown; username?: unknown; name?: unknown } | string | undefined;
+      return {
+        author: normalizeProviderAuthor(author ?? user),
+        created_at: typeof entry.created_at === "string" ? entry.created_at : typeof entry.createdAt === "string" ? entry.createdAt : "",
+        body: entry.body,
+      };
+    })
+    .filter((comment): comment is TrackedItemComment => comment !== null);
+}
+
+function normalizeProviderAuthor(value: unknown): string {
+  if (typeof value === "string") return value;
+  const author = value as { login?: unknown; username?: unknown; name?: unknown } | undefined;
+  return typeof author?.login === "string" ? author.login : typeof author?.username === "string" ? author.username : typeof author?.name === "string" ? author.name : "unknown";
+}
+
+function normalizeProviderLabels(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((label) => {
+      if (typeof label === "string") return label;
+      const entry = label as { name?: unknown };
+      return typeof entry.name === "string" ? entry.name : null;
+    })
+    .filter((label): label is string => label !== null);
+}
+
+function formatCommentsMarkdown(comments: TrackedItemComment[]): string {
+  if (comments.length === 0) return "_No comments captured._\n";
+  return comments.map((comment) => `### ${comment.author}${comment.created_at ? ` at ${comment.created_at}` : ""}\n\n${comment.body}`).join("\n\n");
+}
+
+function buildTrackedItemContext(item: TrackedItem): string {
+  return `Description:\n\n${item.description || "No issue description provided."}\n\n` +
+    `Comments:\n\n${formatCommentsMarkdown(item.comments)}` +
+    `\nLabels: ${item.labels.length > 0 ? item.labels.join(", ") : "none"}`;
+}
+
 function buildStartArtifacts({
-  issue,
-  issueReference,
+  item,
+  workKey,
   workDir,
   root,
 }: {
-  issue: GitHubItem;
-  issueReference: IssueReference;
+  item: TrackedItem;
+  workKey: string;
   workDir: string;
   root: string;
 }): Record<string, string> {
-  const contract = buildContract(issue, issueReference);
+  const contract = buildContract(item);
   const status = {
     schema_version: 1,
     status: "active",
-    issue: issueReference,
+    issue: item.ref,
+    work_key: workKey,
     work_directory: relative(root, workDir),
     artifacts: {
+      tracked_item: "tracked-item.json",
       issue: "issue.md",
       contract: "contract.md",
       goal_prompt: "goal-prompt.md",
@@ -2404,29 +2721,46 @@ function buildStartArtifacts({
     created_by: "slopflow start",
   };
   return {
-    "issue.md": buildIssueMarkdown(issue, issueReference),
+    "tracked-item.json": `${JSON.stringify(buildTrackedItemSnapshot(item), null, 2)}\n`,
+    "issue.md": buildIssueMarkdown(item),
     "contract.md": contract,
     "status.json": `${JSON.stringify(status, null, 2)}\n`,
     "goal-prompt.md": buildGoalPrompt(contract),
-    "next-steps.md": buildNextSteps(issueReference),
+    "next-steps.md": buildNextSteps(item.ref),
   };
 }
 
-function buildIssueMarkdown(issue: GitHubItem, issueReference: IssueReference): string {
-  return `# ${escapeMarkdown(issue.title)}\n\n` +
-    `Issue: github:${issueReference.repo}#${issueReference.number}\n\n` +
-    `Kind: ${issueReference.kind}\n\n` +
-    `State: ${issue.state}\n\n` +
-    `URL: ${issue.url}\n\n` +
-    `## Body\n\n${issue.body || "_No issue body provided._"}\n`;
+function buildTrackedItemSnapshot(item: TrackedItem): Record<string, unknown> {
+  return {
+    schema_version: 1,
+    fetched_at: new Date().toISOString(),
+    ref: item.ref,
+    title: item.title,
+    description: item.description,
+    comments: item.comments,
+    labels: item.labels,
+    state: item.state,
+    url: item.url,
+  };
 }
 
-function buildContract(issue: GitHubItem, issueReference: IssueReference): string {
+function buildIssueMarkdown(item: TrackedItem): string {
+  return `# ${escapeMarkdown(item.title)}\n\n` +
+    `Issue: ${issueText(item.ref)}\n\n` +
+    `Kind: ${item.ref.kind}\n\n` +
+    `State: ${item.state}\n\n` +
+    `URL: ${item.url}\n\n` +
+    `## Description\n\n${item.description || "_No issue description provided._"}\n\n` +
+    `## Comments\n\n${formatCommentsMarkdown(item.comments)}`;
+}
+
+function buildContract(item: TrackedItem): string {
+  const providerContext = buildTrackedItemContext(item);
   return `# Issue Execution Contract\n\n` +
-    `Issue: github:${issueReference.repo}#${issueReference.number}\n\n` +
-    `## Issue Summary\n\n${issue.title}\n\n` +
-    `## Acceptance Criteria\n\nExtract from the source issue before implementing. Source issue body:\n\n${indentBlock(issue.body || "No issue body provided.")}\n\n` +
-    `## Constraints\n\n- Stay within the scope of github:${issueReference.repo}#${issueReference.number}.\n- Preserve Slopflow's CLI-runbook model; do not introduce autonomous orchestration unless explicitly approved.\n- Do not add dependencies without justification and review.\n\n` +
+    `Issue: ${issueText(item.ref)}\n\n` +
+    `## Issue Summary\n\n${item.title}\n\n` +
+    `## Acceptance Criteria\n\nExtract from the source issue before implementing. Source tracked item context:\n\n${indentBlock(providerContext)}\n\n` +
+    `## Constraints\n\n- Stay within the scope of ${issueText(item.ref)}.\n- Preserve Slopflow's CLI-runbook model; do not introduce autonomous orchestration unless explicitly approved.\n- Do not add dependencies without justification and review.\n\n` +
     `## Out of Scope\n\n- Work not requested by the source issue.\n- Publishing, pushing, merging, creating PRs, or closing issues unless separately requested.\n\n` +
     `## Required Quality Gates\n\n- Test evidence is required unless an explicit test exception is written and accepted by review.\n- Reviewer verdict is required before completion.\n- Browser or design evidence is required only if this contract is updated to require it.\n\n` +
     `## Blocked-Stop Conditions\n\n- Acceptance criteria cannot be extracted from the issue.\n- Required external tools or credentials are unavailable.\n- The implementation would expand beyond the source issue.\n- Quality gates cannot run and no reviewed test exception exists.\n\n` +
@@ -2439,7 +2773,7 @@ function buildGoalPrompt(contract: string): string {
 
 function buildNextSteps(issueReference: IssueReference): string {
   return `# Next Steps\n\n` +
-    `1. Read \`contract.md\` and confirm scope for github:${issueReference.repo}#${issueReference.number}.\n` +
+    `1. Read \`contract.md\` and confirm scope for ${issueText(issueReference)}.\n` +
     `2. Create a Pi goal mirror from \`goal-prompt.md\` if working inside Pi.\n` +
     `3. Plan the smallest implementation that satisfies the contract.\n` +
     `4. Implement only the contract scope.\n` +
@@ -2460,7 +2794,7 @@ function buildReviewPacket({ root, workDir, issue, testsPath, vcs }: { root: str
 
   return `# Review Packet\n\n` +
     `## Issue Reference\n\n` +
-    `Issue: ${issue.provider}:${issue.repo}#${issue.number}\n\n` +
+    `Issue: ${issueText(issue)}\n\n` +
     `Kind: ${issue.kind}\n\n` +
     `## Reviewer Instructions\n\n` +
     `Review the diff against the issue execution contract. Slopflow does not create \`review.json\`; write it only if you are the reviewer.\n\n` +
@@ -2693,8 +3027,9 @@ function desiredConfig(githubRepo: string, vcs: SupportedVcs): MachineConfig {
     artifact_root: DEFAULT_ARTIFACT_ROOT,
     workspace_root: ".slopflow-workspaces",
     issue_tracker: {
-      type: "github",
-      repo: githubRepo,
+      provider: "github",
+      repository: githubRepo,
+      base_url: defaultBaseUrl("github"),
       prs_as_request_surface: DEFAULT_PRS_AS_REQUEST_SURFACE,
     },
     vcs: { type: vcs },
