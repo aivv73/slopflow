@@ -280,7 +280,7 @@ test("install requires explicit harness in non-interactive mode", requiresJj, wi
 
   assert.equal(result.status, 2);
   assert.match(result.stdout, /Missing harness selection/);
-  assert.match(result.stdout, /slopflow install --harness pi\|claude-code\|generic/);
+  assert.match(result.stdout, /slopflow install --harness pi\|omp\|claude-code\|generic/);
 }));
 
 test("install pi dry-run prints project-local workflow pack plan without writing", requiresJj, withRepo((repo, env) => {
@@ -295,7 +295,7 @@ test("install pi dry-run prints project-local workflow pack plan without writing
   assert.match(result.stdout, /extensions: \.pi\/extensions/);
   assert.match(result.stdout, /agents: \.pi\/agents/);
   assert.match(result.stdout, /settings: \.pi\/settings\.json/);
-  assert.match(result.stdout, /packages: 4/);
+  assert.match(result.stdout, /packages: 3/);
   assert.match(result.stdout, /writes: none/);
   assert.match(result.stdout, /next-step: slopflow install --harness pi --yes/);
   assert.equal(existsSync(join(repo, ".pi", "skills", "slopflow-live", "SKILL.md")), false);
@@ -318,11 +318,11 @@ test("install pi --yes writes local extensions live skills and agent roles", req
   assert.match(extension, /slopflow", \["start", issueId\]/);
   const settings = JSON.parse(readFileSync(join(repo, ".pi", "settings.json"), "utf8"));
   assert.deepEqual(settings.packages, [
-    "npm:@howaboua/pi-codex-conversion",
     "git:github.com/joelhooks/pi-skill-interpolation",
     "npm:@tintinweb/pi-subagents",
     "npm:pi-codex-goal",
   ]);
+  assert.equal(settings.packages.includes("npm:@howaboua/pi-codex-conversion"), false);
   const planner = readFileSync(join(repo, ".pi", "agents", "slopflow-planner.md"), "utf8");
   const executor = readFileSync(join(repo, ".pi", "agents", "slopflow-executor.md"), "utf8");
   const reviewer = readFileSync(join(repo, ".pi", "agents", "slopflow-reviewer.md"), "utf8");
@@ -353,13 +353,51 @@ test("install pi merges existing project settings packages", requiresJj, withRep
   assert.equal(settings.enableSkillCommands, true);
   assert.deepEqual(settings.packages, [
     "npm:existing-pkg",
-    "npm:@howaboua/pi-codex-conversion",
     "git:github.com/joelhooks/pi-skill-interpolation",
     "npm:@tintinweb/pi-subagents",
     "npm:pi-codex-goal",
   ]);
+  assert.equal(settings.packages.includes("npm:@howaboua/pi-codex-conversion"), false);
 }));
 
+
+test("install omp dry-run prints native profile plan without writing", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env, "install", "--harness", "omp");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /status: planned/);
+  assert.match(result.stdout, /harness: omp/);
+  assert.match(result.stdout, /skills: \.omp\/skills/);
+  assert.match(result.stdout, /commands: \.omp\/commands/);
+  assert.match(result.stdout, /skill-interpolation: git:github\.com\/joelhooks\/pi-skill-interpolation/);
+  assert.match(result.stdout, /native-subagents: task/);
+  assert.match(result.stdout, /native-goal: goal/);
+  assert.match(result.stdout, /writes: none/);
+  assert.match(result.stdout, /next-step: slopflow install --harness omp --yes/);
+  assert.equal(existsSync(join(repo, ".omp", "skills", "slopflow-live", "SKILL.md")), false);
+  assert.equal(existsSync(join(repo, ".omp", "commands", "slopflow-create-goal.md")), false);
+  assert.equal(existsSync(join(repo, ".pi", "settings.json")), false);
+}));
+
+test("install omp --yes writes native skills and goal command", requiresJj, withRepo((repo, env) => {
+  const result = slopflow(repo, env, "install", "--harness=omp", "--yes");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /status: applied/);
+  assert.match(result.stdout, /harness: omp/);
+  assert.match(result.stdout, /skill-interpolation: git:github\.com\/joelhooks\/pi-skill-interpolation/);
+  assert.match(result.stdout, /native-subagents: task/);
+  assert.match(result.stdout, /native-goal: goal/);
+  assert.equal(existsSync(join(repo, ".omp", "skills", "slopflow-live", "SKILL.md")), true);
+  assert.equal(existsSync(join(repo, ".omp", "skills", "setup-slopflow-skills-live", "SKILL.md")), true);
+  const command = readFileSync(join(repo, ".omp", "commands", "slopflow-create-goal.md"), "utf8");
+  assert.match(command, /\/goal set <goal prompt content>/);
+  assert.match(command, /OMP native primitives/);
+  assert.match(command, /task/);
+  assert.match(command, /git:github\.com\/joelhooks\/pi-skill-interpolation/);
+  assert.doesNotMatch(command, /npm:@howaboua\/pi-codex-conversion/);
+  assert.equal(existsSync(join(repo, ".pi", "settings.json")), false);
+}));
 test("install claude-code --yes writes local live skills", requiresJj, withRepo((repo, env) => {
   const result = slopflow(repo, env, "install", "--harness=claude-code", "--yes");
 

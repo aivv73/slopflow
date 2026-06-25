@@ -155,7 +155,6 @@ Installs a project-local Pi workflow pack:
 The Pi pack merges these project-local packages into `.pi/settings.json`:
 
 ```text
-npm:@howaboua/pi-codex-conversion
 git:github.com/joelhooks/pi-skill-interpolation
 npm:@tintinweb/pi-subagents
 npm:pi-codex-goal
@@ -169,13 +168,31 @@ The local Slopflow Pi extension registers:
 /slopflow-create-goal <issue-id>
 ```
 
-`/slopflow-create-goal <issue-id>` runs `slopflow start`, reads the generated `goal-prompt.md`, and pre-fills `pi-codex-goal`’s `/create-goal` prompt for user review.
+`/slopflow-create-goal <issue-id>` runs `slopflow start`, reads the generated `goal-prompt.md`, and pre-fills `pi-codex-goal`’s `/create-goal` prompt for user review. Codex-specific conversion helpers are runtime adapters and are not installed by default.
 
 The installed Pi subagent roles are:
 
 - `slopflow-planner` — read-only planning agent with `skills: slopflow-live`
 - `slopflow-executor` — write-capable execution agent with `prompt_mode: append`
 - `slopflow-reviewer` — read-only review agent with `thinking: high`
+
+
+### `slopflow install --harness omp`
+
+Installs an Oh My Pi workflow profile under:
+
+```text
+.omp/skills/
+.omp/commands/
+```
+
+The OMP profile uses native OMP primitives instead of Codex adapter packages:
+
+- subagents: OMP `task`
+- goal mirrors: OMP `/goal`
+- skill shell interpolation: requires `git:github.com/joelhooks/pi-skill-interpolation` in the active OMP/Pi environment
+
+Slopflow does not install OMP itself and does not install `npm:@howaboua/pi-codex-conversion`, `npm:@tintinweb/pi-subagents`, or `npm:pi-codex-goal` for the OMP profile.
 
 ### `slopflow install --harness claude-code`
 

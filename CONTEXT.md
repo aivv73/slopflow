@@ -25,10 +25,10 @@ A structured identifier for the configured issue tracker item, including provide
 _Avoid_: Bare issue id, ticket string
 
 **Goal mirror**:
-A Pi persistent goal created from the issue execution contract so the active coding session keeps the same objective in context.
+An agent-harness persistent goal created from the issue execution contract so the active coding session keeps the same objective in context.
 _Avoid_: Canonical contract, source of truth
 
-By default, `start` writes a `goal-prompt.md` artifact for creating a goal mirror. Automatic goal creation is opt-in.
+By default, `start` writes a `goal-prompt.md` artifact for creating a goal mirror. Automatic native goal creation is opt-in and depends on the active agent harness.
 
 **Work directory**:
 The `.slopflow/work/<issue-id>/` directory that stores the local contract, evidence, reviewer verdict, status metadata, and completion note for one issue.
@@ -172,6 +172,18 @@ _Avoid_: Agent instructions, domain docs, product spec
 **Agent skill**:
 A distributable instruction package that teaches an agent harness how to follow Slopflow safely. Agent skills are distributed through a skills installer such as Vercel Skills rather than being installed or wired into each agent harness by the Slopflow CLI.
 _Avoid_: CLI plugin, runtime integration, built-in agent adapter
+
+**Agent capability requirement**:
+A declarative requirement in an agent-facing Slopflow artifact that names a capability expected from the active agent harness, such as subagents, goal mirrors, or agent skill loading.
+_Avoid_: Runtime integration, installed dependency, managed feature
+
+**Skill reference interpolation**:
+The Slopflow practice of placing required agent skill references into generated agent-facing artifacts while leaving skill installation and execution to the active agent harness.
+_Avoid_: Skill installation, harness wiring, built-in skill runtime
+
+**Runtime adapter**:
+An optional Slopflow-adjacent tool or recipe that translates portable Slopflow artifacts for a specific agent harness.
+_Avoid_: Core dependency, required installer component, agent runtime
 
 **Setup skill**:
 An agent skill intended to run first in a newly onboarded project so the project's issue tracker, triage label vocabulary, and domain documentation layout are recorded before issue execution starts.

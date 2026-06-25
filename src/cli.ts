@@ -347,7 +347,7 @@ function doctorDetail(value: string, limit = 160): string {
   return normalized.length > limit ? `${normalized.slice(0, limit)}...` : normalized;
 }
 
-type Harness = "pi" | "claude-code" | "generic";
+type Harness = "pi" | "omp" | "claude-code" | "generic";
 
 type InstallArgs = {
   harness: Harness;
@@ -426,14 +426,14 @@ async function parseInstallArgs(args: string[]): Promise<InstallArgs> {
   if (args[0] === "minimal") {
     throw new SlopflowError(
       "`slopflow install minimal` has been replaced by `slopflow init`.",
-      "Run `slopflow init` for minimal setup, or `slopflow install --harness pi|claude-code|generic` for a harness workflow pack.",
+      "Run `slopflow init` for minimal setup, or `slopflow install --harness pi|omp|claude-code|generic` for a harness workflow pack.",
       2,
     );
   }
   if (args[0] === "recommended") {
     throw new SlopflowError(
       "`slopflow install recommended` has been replaced by explicit harness workflow packs.",
-      "Run `slopflow install --harness pi|claude-code|generic`.",
+      "Run `slopflow install --harness pi|omp|claude-code|generic`.",
       2,
     );
   }
@@ -449,36 +449,37 @@ async function parseInstallArgs(args: string[]): Promise<InstallArgs> {
       force = true;
     } else if (arg === "--harness") {
       const next = args[index + 1];
-      if (!next) throw new SlopflowError("Missing harness value.", "Run `slopflow install --harness pi|claude-code|generic`.", 2);
+      if (!next) throw new SlopflowError("Missing harness value.", "Run `slopflow install --harness pi|omp|claude-code|generic`.", 2);
       harness = parseHarness(next);
       index += 1;
     } else if (arg?.startsWith("--harness=")) {
       harness = parseHarness(arg.slice("--harness=".length));
     } else if (arg) {
-      throw new SlopflowError("Unsupported install argument.", "Run `slopflow install --harness pi|claude-code|generic [--yes] [--force]`.", 2);
+      throw new SlopflowError("Unsupported install argument.", "Run `slopflow install --harness pi|omp|claude-code|generic [--yes] [--force]`.", 2);
     }
   }
   if (!harness && process.stdin.isTTY && process.stdout.isTTY) {
     harness = await promptForHarness();
   }
   if (!harness) {
-    throw new SlopflowError("Missing harness selection.", "Run `slopflow install --harness pi|claude-code|generic`.", 2);
+    throw new SlopflowError("Missing harness selection.", "Run `slopflow install --harness pi|omp|claude-code|generic`.", 2);
   }
   return { harness, yes, force };
 }
 
 function parseHarness(value: string): Harness {
-  if (value === "pi" || value === "claude-code" || value === "generic") return value;
-  throw new SlopflowError("Unsupported harness.", "Use one of: pi, claude-code, generic.", 2);
+  if (value === "pi" || value === "omp" || value === "claude-code" || value === "generic") return value;
+  throw new SlopflowError("Unsupported harness.", "Use one of: pi, omp, claude-code, generic.", 2);
 }
 
 async function promptForHarness(): Promise<Harness> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    const answer = (await rl.question("Which agent harness do you use? [pi/claude-code/generic] ")).trim().toLowerCase();
+    const answer = (await rl.question("Which agent harness do you use? [pi/omp/claude-code/generic] ")).trim().toLowerCase();
     if (answer === "1") return "pi";
-    if (answer === "2") return "claude-code";
-    if (answer === "3" || answer === "other") return "generic";
+    if (answer === "2") return "omp";
+    if (answer === "3") return "claude-code";
+    if (answer === "4" || answer === "other") return "generic";
     return parseHarness(answer);
   } finally {
     rl.close();
@@ -495,6 +496,10 @@ function buildHarnessInstallPack(root: string, harness: Harness): InstallPackFil
     files.push({ destination: join(root, ".pi", "agents", "slopflow-planner.md"), content: piAgentRoleTemplate("planner") });
     files.push({ destination: join(root, ".pi", "agents", "slopflow-executor.md"), content: piAgentRoleTemplate("executor") });
     files.push({ destination: join(root, ".pi", "agents", "slopflow-reviewer.md"), content: piAgentRoleTemplate("reviewer") });
+  } else if (harness === "omp") {
+    files.push(...collectSkillPack("slopflow-live", join(root, ".omp", "skills", "slopflow-live")));
+    files.push(...collectSkillPack("setup-slopflow-skills-live", join(root, ".omp", "skills", "setup-slopflow-skills-live")));
+    files.push({ destination: join(root, ".omp", "commands", "slopflow-create-goal.md"), content: ompCreateGoalCommandTemplate() });
   } else if (harness === "claude-code") {
     files.push(...collectSkillPack("slopflow-live", join(root, ".claude", "skills", "slopflow-live")));
     files.push(...collectSkillPack("setup-slopflow-skills-live", join(root, ".claude", "skills", "setup-slopflow-skills-live")));
@@ -556,15 +561,25 @@ function harnessInstallSummary(harness: Harness, root: string): Record<string, s
       packages: String(PI_RECOMMENDED_PACKAGES.length),
     };
   }
+  if (harness === "omp") {
+    return {
+      skills: relativeToCwd(join(root, ".omp", "skills")),
+      commands: relativeToCwd(join(root, ".omp", "commands")),
+      "skill-interpolation": SKILL_INTERPOLATION_PACKAGE,
+      "native-subagents": "task",
+      "native-goal": "goal",
+    };
+  }
   if (harness === "claude-code") {
     return { skills: relativeToCwd(join(root, ".claude", "skills")), extensions: "not-supported", agents: "not-supported" };
   }
   return { skills: relativeToCwd(join(root, ".agents", "skills")), "live-skills": "skipped", extensions: "skipped", agents: "skipped" };
 }
 
+const SKILL_INTERPOLATION_PACKAGE = "git:github.com/joelhooks/pi-skill-interpolation";
+
 const PI_RECOMMENDED_PACKAGES = [
-  "npm:@howaboua/pi-codex-conversion",
-  "git:github.com/joelhooks/pi-skill-interpolation",
+  SKILL_INTERPOLATION_PACKAGE,
   "npm:@tintinweb/pi-subagents",
   "npm:pi-codex-goal",
 ];
@@ -633,6 +648,25 @@ export default function (pi: ExtensionAPI) {
     },
   });
 }
+`;
+}
+
+function ompCreateGoalCommandTemplate(): string {
+  return `# Create a Slopflow goal mirror
+
+## Arguments
+
+- \`$ARGUMENTS\` — numeric issue id.
+
+## Steps
+
+1. Validate that \`$ARGUMENTS\` is a numeric issue id.
+2. Run \`slopflow start <issue-id>\`.
+3. Read the generated \`.slopflow/work/<issue-id>/goal-prompt.md\`.
+4. Create an OMP native goal mirror from that prompt with \`/goal set <goal prompt content>\`.
+5. Continue through the \`slopflow-live\` skill workflow.
+
+Use OMP native primitives for this harness profile: \`task\` for subagents and \`/goal\` for goal mirrors. Skill shell interpolation requires \`${SKILL_INTERPOLATION_PACKAGE}\` to be installed in the active OMP/Pi environment. Do not install Codex-specific conversion, subagent, or goal adapter packages for OMP.
 `;
 }
 
@@ -2862,7 +2896,7 @@ function printJson(value: unknown, stream: NodeJS.WritableStream = process.stdou
 
 function printHelp(): void {
   process.stdout.write(
-    `Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  doctor\n  install --harness pi|claude-code|generic [--yes] [--force]\n  start <issue-id>\n  attempt create <issue-id> [--count <n>]\n  attempt list <issue-id>\n  attempt status <issue-id> [attempt-id]\n  attempt submit <issue-id> <attempt-id>\n  attempt abandon <issue-id> <attempt-id> --reason <text>\n  attempt compare <issue-id>\n  attempt select <issue-id> <attempt-id> --reason <text>\n  attempt promote <issue-id>\n  pause <issue-id> --reason <text>\n  resume <issue-id>\n  cancel <issue-id> --reason <text>\n  test <issue-id> --name <gate> -- <command...>\n  test <issue-id> --attempt <attempt-id> --name <gate> -- <command...>\n  review <issue-id>\n  complete <issue-id>\n`,
+    `Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  doctor\n  install --harness pi|omp|claude-code|generic [--yes] [--force]\n  start <issue-id>\n  attempt create <issue-id> [--count <n>]\n  attempt list <issue-id>\n  attempt status <issue-id> [attempt-id]\n  attempt submit <issue-id> <attempt-id>\n  attempt abandon <issue-id> <attempt-id> --reason <text>\n  attempt compare <issue-id>\n  attempt select <issue-id> <attempt-id> --reason <text>\n  attempt promote <issue-id>\n  pause <issue-id> --reason <text>\n  resume <issue-id>\n  cancel <issue-id> --reason <text>\n  test <issue-id> --name <gate> -- <command...>\n  test <issue-id> --attempt <attempt-id> --name <gate> -- <command...>\n  review <issue-id>\n  complete <issue-id>\n  skill <name>\n`,
   );
 }
 
