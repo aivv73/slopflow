@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -78,6 +78,10 @@ function parseJsonOutput(result) {
   return JSON.parse(result.stdout);
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function withRepo(fn) {
   return async () => {
     const { dir, repo, env } = makeRepo();
@@ -139,6 +143,7 @@ test("init creates machine config and work root", requiresJj, withRepo((repo, en
   assert.deepEqual(config, {
     schema_version: 1,
     artifact_root: ".slopflow/work",
+    workspace_root: ".slopflow-workspaces",
     issue_tracker: {
       type: "github",
       repo: "aivv73/slopflow",
@@ -251,6 +256,7 @@ test("install pi --yes writes local extensions live skills and agent roles", req
   const planner = readFileSync(join(repo, ".pi", "agents", "slopflow-planner.md"), "utf8");
   const executor = readFileSync(join(repo, ".pi", "agents", "slopflow-executor.md"), "utf8");
   const reviewer = readFileSync(join(repo, ".pi", "agents", "slopflow-reviewer.md"), "utf8");
+  const liveSkill = readFileSync(join(repo, ".pi", "skills", "slopflow-live", "SKILL.md"), "utf8");
   assert.match(planner, /tools: read, grep, find, bash, ls/);
   assert.match(planner, /skills: slopflow-live/);
   assert.match(planner, /prompt_mode: replace/);
@@ -259,6 +265,11 @@ test("install pi --yes writes local extensions live skills and agent roles", req
   assert.match(executor, /prompt_mode: append/);
   assert.match(reviewer, /thinking: high/);
   assert.match(reviewer, /max_turns: 25/);
+  assert.match(liveSkill, /canonical repository/);
+  assert.match(liveSkill, /execution workspace/);
+  assert.match(liveSkill, /\.slopflow-attempt\.json/);
+  assert.match(liveSkill, /artifact-only/);
+  assert.match(liveSkill, /Do not manually fabricate attempt artifacts/);
 }));
 
 test("install pi merges existing project settings packages", requiresJj, withRepo((repo, env) => {
@@ -297,6 +308,15 @@ test("install generic --yes writes portable agent skills", requiresJj, withRepo(
   assert.match(result.stdout, /live-skills: skipped/);
   assert.equal(existsSync(join(repo, ".agents", "skills", "slopflow", "SKILL.md")), true);
   assert.equal(existsSync(join(repo, ".agents", "skills", "setup-slopflow-skills", "SKILL.md")), true);
+  const skill = readFileSync(join(repo, ".agents", "skills", "slopflow", "SKILL.md"), "utf8");
+  assert.match(skill, /slopflow test <issue-id> --attempt <attempt-id> --name <gate> -- <command\.\.\.>/);
+  assert.match(skill, /slopflow attempt compare <issue-id>/);
+  assert.match(skill, /slopflow attempt select <issue-id> <attempt-id> --reason/);
+  assert.match(skill, /slopflow attempt promote <issue-id>/);
+  assert.match(skill, /canonical repository/);
+  assert.match(skill, /execution workspace/);
+  assert.match(skill, /artifact-only/);
+  assert.match(skill, /canonical run/);
   assert.equal(existsSync(join(repo, ".claude")), false);
 }));
 
@@ -515,6 +535,10 @@ test("help flag prints concise command reference", () => {
   assert.match(result.stdout, /Usage: slopflow <command>/);
   assert.match(result.stdout, /Commands:/);
   assert.match(result.stdout, /status/);
+  assert.match(result.stdout, /attempt create <issue-id>/);
+  assert.match(result.stdout, /attempt compare <issue-id>/);
+  assert.match(result.stdout, /attempt promote <issue-id>/);
+  assert.match(result.stdout, /test <issue-id> --attempt <attempt-id> --name <gate> -- <command\.\.\.>/);
   assert.match(result.stdout, /complete <issue-id>/);
 });
 
@@ -582,6 +606,204 @@ test("start is idempotent for matching work directory", requiresJj, withRepo((re
 
   assert.equal(second.status, 0, second.stderr);
   assert.match(second.stdout, /status: unchanged/);
+}));
+
+test("start uses the issue work lock and force recovers stale start locks", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  const workLock = join(repo, ".slopflow", "work", "2", "locks", "work.lock");
+  mkdirSync(workLock, { recursive: true });
+  writeFileSync(join(workLock, "metadata.json"), JSON.stringify({ created_at: "2026-01-01T00:00:00.000Z" }), "utf8");
+
+  const blocked = slopflow(repo, env, "start", "2");
+  assert.equal(blocked.status, 2);
+  assert.match(blocked.stdout, /scope: work/);
+  assert.match(blocked.stdout, /work\.lock/);
+
+  const forced = slopflow(repo, env, "start", "2", "--force");
+  assert.equal(forced.status, 0, forced.stderr);
+  assert.match(forced.stdout, /status: created/);
+  assert.equal(existsSync(workLock), false);
+  assert.equal(existsSync(join(repo, ".slopflow", "work", "2", "status.json")), true);
+}));
+
+test("attempt create list and status manage issue-local attempt artifacts", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+
+  const created = slopflow(repo, env, "attempt", "create", "2", "--count", "3");
+
+  assert.equal(created.status, 0, created.stderr);
+  assert.match(created.stdout, /attempt:/);
+  assert.match(created.stdout, /status: created/);
+  assert.match(created.stdout, /created-count: 3/);
+  assert.match(created.stdout, /attempts: a1,a2,a3/);
+
+  const attemptsRoot = join(repo, ".slopflow", "work", "2", "attempts");
+  for (const id of ["a1", "a2", "a3"]) {
+    const attempt = JSON.parse(readFileSync(join(attemptsRoot, id, "attempt.json"), "utf8"));
+    assert.equal(attempt.issue_id, "2");
+    assert.equal(attempt.attempt_id, id);
+    assert.equal(attempt.status, "created");
+    assert.equal(existsSync(join(attemptsRoot, id, "goal-prompt.md")), true);
+    const workspace = JSON.parse(readFileSync(join(attemptsRoot, id, "workspace.json"), "utf8"));
+    assert.equal(workspace.kind, "jj-workspace");
+    assert.match(workspace.path, new RegExp(`${escapeRegExp(join(dirname(repo), ".slopflow-workspaces"))}.*${id}$`));
+    assert.equal(existsSync(workspace.path), true);
+    const pointer = JSON.parse(readFileSync(join(workspace.path, ".slopflow-attempt.json"), "utf8"));
+    assert.equal(pointer.canonical_repository, repo);
+    assert.equal(pointer.issue_id, "2");
+    assert.equal(pointer.attempt_id, id);
+    assert.equal(existsSync(join(attemptsRoot, id, "summary.md")), false);
+  }
+
+  const list = slopflow(repo, env, "attempt", "list", "2");
+  assert.equal(list.status, 0, list.stderr);
+  assert.match(list.stdout, /attempts:/);
+  assert.match(list.stdout, /count: 3/);
+  assert.match(list.stdout, /attempts: a1:created,a2:created,a3:created/);
+
+  const status = slopflow(repo, env, "attempt", "status", "2", "a2");
+  assert.equal(status.status, 0, status.stderr);
+  assert.match(status.stdout, /attempt:/);
+  assert.match(status.stdout, /status: created/);
+  assert.match(status.stdout, /attempt: a2/);
+  assert.match(status.stdout, /summary: missing/);
+}));
+
+test("attempt create supports configured workspace root and cleans up unsupported vcs failures", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  const configPath = join(repo, ".slopflow", "config.json");
+  const config = JSON.parse(readFileSync(configPath, "utf8"));
+  config.workspace_root = ".custom-workspaces";
+  writeFileSync(configPath, JSON.stringify(config), "utf8");
+
+  const created = slopflow(repo, env, "attempt", "create", "2");
+  assert.equal(created.status, 0, created.stderr);
+  const workspace = JSON.parse(readFileSync(join(repo, ".slopflow", "work", "2", "attempts", "a1", "workspace.json"), "utf8"));
+  assert.match(workspace.path, new RegExp(`${escapeRegExp(join(dirname(repo), ".custom-workspaces"))}.*a1$`));
+
+  config.vcs.type = "unsupported";
+  writeFileSync(configPath, JSON.stringify(config), "utf8");
+  const blocked = slopflow(repo, env, "attempt", "create", "2");
+  assert.equal(blocked.status, 2);
+  assert.match(blocked.stdout, /Unsupported version-control type/);
+  assert.equal(existsSync(join(repo, ".slopflow", "work", "2", "attempts", "a2")), false);
+}));
+
+test("attempt submit requires summary and abandon preserves artifacts", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  assert.equal(slopflow(repo, env, "attempt", "create", "2", "--count", "2").status, 0);
+  const attemptsRoot = join(repo, ".slopflow", "work", "2", "attempts");
+
+  const missing = slopflow(repo, env, "attempt", "submit", "2", "a1");
+  assert.equal(missing.status, 2);
+  assert.match(missing.stdout, /status: blocked/);
+  assert.match(missing.stdout, /reason: missing summary\.md/);
+  assert.match(missing.stdout, /slopflow attempt submit 2 a1/);
+
+  writeFileSync(join(attemptsRoot, "a1", "summary.md"), "Implemented attempt a1.\n", "utf8");
+  const submitted = slopflow(repo, env, "attempt", "submit", "2", "a1");
+  assert.equal(submitted.status, 0, submitted.stderr);
+  assert.match(submitted.stdout, /status: submitted/);
+  assert.match(submitted.stdout, /next-step: slopflow attempt status 2 a1/);
+  assert.equal(JSON.parse(readFileSync(join(attemptsRoot, "a1", "attempt.json"), "utf8")).status, "submitted");
+
+  const abandoned = slopflow(repo, env, "attempt", "abandon", "2", "a2", "--reason", "not worth continuing");
+  assert.equal(abandoned.status, 0, abandoned.stderr);
+  assert.match(abandoned.stdout, /status: abandoned/);
+  assert.match(abandoned.stdout, /artifacts: preserved/);
+  const a2 = JSON.parse(readFileSync(join(attemptsRoot, "a2", "attempt.json"), "utf8"));
+  assert.equal(a2.status, "abandoned");
+  assert.equal(a2.abandon_reason, "not worth continuing");
+  assert.match(readFileSync(join(attemptsRoot, "a2", "abandon-note.md"), "utf8"), /not worth continuing/);
+}));
+
+test("attempt commands block on artifact locks and require force for stale recovery", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+
+  const workLock = join(repo, ".slopflow", "work", "2", "locks", "work.lock");
+  mkdirSync(workLock, { recursive: true });
+  writeFileSync(join(workLock, "metadata.json"), JSON.stringify({ created_at: "2026-01-01T00:00:00.000Z" }), "utf8");
+  const blockedCreate = slopflow(repo, env, "attempt", "create", "2");
+  assert.equal(blockedCreate.status, 2);
+  assert.match(blockedCreate.stdout, /status: blocked/);
+  assert.match(blockedCreate.stdout, /scope: work/);
+  assert.match(blockedCreate.stdout, /work\.lock/);
+  assert.match(blockedCreate.stdout, /--force if stale/);
+
+  const forcedCreate = slopflow(repo, env, "attempt", "create", "2", "--force");
+  assert.equal(forcedCreate.status, 0, forcedCreate.stderr);
+  assert.match(forcedCreate.stdout, /attempts: a1/);
+  assert.equal(existsSync(workLock), false);
+
+  const attemptDir = join(repo, ".slopflow", "work", "2", "attempts", "a1");
+  writeFileSync(join(attemptDir, "summary.md"), "Ready.\n", "utf8");
+  const attemptLock = join(attemptDir, "attempt.lock");
+  mkdirSync(attemptLock, { recursive: true });
+  writeFileSync(join(attemptLock, "metadata.json"), JSON.stringify({ created_at: "2026-01-01T00:00:00.000Z" }), "utf8");
+
+  const blockedSubmit = slopflow(repo, env, "attempt", "submit", "2", "a1");
+  assert.equal(blockedSubmit.status, 2);
+  assert.match(blockedSubmit.stdout, /scope: attempt/);
+  assert.match(blockedSubmit.stdout, /attempt\.lock/);
+
+  const forcedSubmit = slopflow(repo, env, "attempt", "submit", "2", "a1", "--force");
+  assert.equal(forcedSubmit.status, 0, forcedSubmit.stderr);
+  assert.match(forcedSubmit.stdout, /status: submitted/);
+  assert.equal(existsSync(attemptLock), false);
+
+  const selectionLock = join(repo, ".slopflow", "work", "2", "locks", "selection.lock");
+  mkdirSync(selectionLock, { recursive: true });
+  writeFileSync(join(selectionLock, "metadata.json"), JSON.stringify({ created_at: "2026-01-01T00:00:00.000Z" }), "utf8");
+
+  const blockedSelect = slopflow(repo, env, "attempt", "select", "2", "a1", "--reason", "best submitted attempt");
+  assert.equal(blockedSelect.status, 2);
+  assert.match(blockedSelect.stdout, /scope: selection/);
+  assert.match(blockedSelect.stdout, /selection\.lock/);
+
+  const forcedSelect = slopflow(repo, env, "attempt", "select", "2", "a1", "--reason", "best submitted attempt", "--force");
+  assert.equal(forcedSelect.status, 0, forcedSelect.stderr);
+  assert.match(forcedSelect.stdout, /status: selected/);
+  assert.equal(existsSync(selectionLock), false);
+  const selection = JSON.parse(readFileSync(join(repo, ".slopflow", "work", "2", "selection.json"), "utf8"));
+  assert.equal(selection.selected_attempt_id, "a1");
+  assert.equal(JSON.parse(readFileSync(join(attemptDir, "attempt.json"), "utf8")).status, "selected");
+}));
+
+test("canonical issue artifact mutations use the issue work lock", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  const workLock = join(repo, ".slopflow", "work", "2", "locks", "work.lock");
+  mkdirSync(workLock, { recursive: true });
+  writeFileSync(join(workLock, "metadata.json"), JSON.stringify({ created_at: "2026-01-01T00:00:00.000Z" }), "utf8");
+
+  const blockedTest = slopflow(repo, env, "test", "2", "--name", "unit", "--", process.execPath, "-e", "process.exit(0)");
+  assert.equal(blockedTest.status, 2);
+  assert.match(blockedTest.stdout, /scope: work/);
+  assert.match(blockedTest.stdout, /work\.lock/);
+
+  const forcedTest = slopflow(repo, env, "test", "2", "--force", "--name", "unit", "--", process.execPath, "-e", "process.exit(0)");
+  assert.equal(forcedTest.status, 0, forcedTest.stderr);
+  assert.equal(existsSync(workLock), false);
+
+  mkdirSync(workLock, { recursive: true });
+  const blockedReview = slopflow(repo, env, "review", "2");
+  assert.equal(blockedReview.status, 2);
+  assert.match(blockedReview.stdout, /scope: work/);
+  const forcedReview = slopflow(repo, env, "review", "2", "--force");
+  assert.equal(forcedReview.status, 0, forcedReview.stderr);
+  assert.equal(existsSync(workLock), false);
+
+  mkdirSync(workLock, { recursive: true });
+  const blockedPause = slopflow(repo, env, "pause", "2", "--reason", "waiting");
+  assert.equal(blockedPause.status, 2);
+  assert.match(blockedPause.stdout, /scope: work/);
+  const forcedPause = slopflow(repo, env, "pause", "2", "--reason", "waiting", "--force");
+  assert.equal(forcedPause.status, 0, forcedPause.stderr);
+  assert.equal(existsSync(workLock), false);
 }));
 
 test("start refuses existing work directory without status metadata", requiresJj, withRepo((repo, env) => {
@@ -742,6 +964,199 @@ test("test appends attempts and updates latest per gate", requiresJj, withRepo((
     log: evidence.attempts[1].log,
   });
   assert.notEqual(evidence.attempts[0].log, evidence.attempts[1].log);
+}));
+
+test("test records attempt-scoped evidence from attempt workspace without satisfying canonical gates", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  assert.equal(slopflow(repo, env, "attempt", "create", "2").status, 0);
+  const attemptDir = join(repo, ".slopflow", "work", "2", "attempts", "a1");
+  const workspace = JSON.parse(readFileSync(join(attemptDir, "workspace.json"), "utf8"));
+
+  const result = run([
+    process.execPath,
+    cliPath,
+    "test",
+    "2",
+    "--attempt",
+    "a1",
+    "--name",
+    "unit",
+    "--",
+    process.execPath,
+    "-e",
+    "require('node:fs').writeFileSync('attempt-cwd.txt', process.cwd())",
+  ], workspace.path, false, env);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /status: passed/);
+  assert.match(result.stdout, /evidence: .*attempts\/a1\/evidence\/tests\.json/);
+  assert.match(result.stdout, /next-step: slopflow attempt submit 2 a1/);
+  assert.equal(readFileSync(join(workspace.path, "attempt-cwd.txt"), "utf8"), workspace.path);
+  assert.equal(existsSync(join(repo, ".slopflow", "work", "2", "evidence", "tests.json")), false);
+
+  const evidencePath = join(attemptDir, "evidence", "tests.json");
+  const evidence = JSON.parse(readFileSync(evidencePath, "utf8"));
+  assert.equal(evidence.attempts.length, 1);
+  assert.equal(evidence.latest.unit.status, "passed");
+  const log = readFileSync(join(attemptDir, evidence.attempts[0].log), "utf8");
+  assert.match(log, new RegExp(`cwd: ${escapeRegExp(workspace.path)}`));
+
+  writeReview(repo, "2");
+  const complete = slopflow(repo, env, "complete", "2");
+  assert.equal(complete.status, 2);
+  assert.match(complete.stdout, /reason: missing test evidence/);
+}));
+
+test("attempt compare writes bounded comparison for submitted attempts without reviewer verdict", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  assert.equal(slopflow(repo, env, "attempt", "create", "2", "--count", "2").status, 0);
+  const attemptsRoot = join(repo, ".slopflow", "work", "2", "attempts");
+  const a1Workspace = JSON.parse(readFileSync(join(attemptsRoot, "a1", "workspace.json"), "utf8"));
+  writeFileSync(join(attemptsRoot, "a1", "summary.md"), "Attempt one changes.\n", "utf8");
+  writeFileSync(join(a1Workspace.path, "attempt-one.txt"), "hello\n", "utf8");
+  assert.equal(run([process.execPath, cliPath, "test", "2", "--attempt", "a1", "--name", "unit", "--", process.execPath, "-e", "process.exit(0)"], a1Workspace.path, false, env).status, 0);
+  assert.equal(slopflow(repo, env, "attempt", "submit", "2", "a1").status, 0);
+
+  writeFileSync(join(attemptsRoot, "a2", "summary.md"), "Attempt two has missing evidence and workspace metadata.\n", "utf8");
+  rmSync(join(attemptsRoot, "a2", "workspace.json"), { force: true });
+  assert.equal(slopflow(repo, env, "attempt", "submit", "2", "a2").status, 0);
+
+  const compared = slopflow(repo, env, "attempt", "compare", "2");
+  assert.equal(compared.status, 0, compared.stderr);
+  assert.match(compared.stdout, /attempt-comparison:/);
+  assert.match(compared.stdout, /status: created/);
+  assert.match(compared.stdout, /attempts: 2/);
+  assert.match(compared.stdout, /comparison: \.slopflow\/work\/2\/attempt-comparison\.md/);
+  assert.equal(existsSync(join(repo, ".slopflow", "work", "2", "review.json")), false);
+
+  const comparison = readFileSync(join(repo, ".slopflow", "work", "2", "attempt-comparison.md"), "utf8");
+  assert.match(comparison, /This artifact is a comparison aid only/);
+  assert.match(comparison, /## a1/);
+  assert.match(comparison, /Attempt one changes/);
+  assert.match(comparison, /Status: present/);
+  assert.match(comparison, /attempt-one\.txt/);
+  assert.match(comparison, /## a2/);
+  assert.match(comparison, /Attempt two has missing evidence/);
+  assert.match(comparison, /Status: missing/);
+  assert.match(comparison, /_Missing workspace\.json_/);
+}));
+
+test("attempt select records auditable decision and handles invalid selections", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  assert.equal(slopflow(repo, env, "attempt", "create", "2", "--count", "3").status, 0);
+  const attemptsRoot = join(repo, ".slopflow", "work", "2", "attempts");
+
+  const missingReason = slopflow(repo, env, "attempt", "select", "2", "a1");
+  assert.equal(missingReason.status, 2);
+  assert.match(missingReason.stdout, /Missing required `--reason <text>`/);
+
+  const notSubmitted = slopflow(repo, env, "attempt", "select", "2", "a1", "--reason", "looks good");
+  assert.equal(notSubmitted.status, 2);
+  assert.match(notSubmitted.stdout, /Only submitted attempts can be selected/);
+
+  for (const id of ["a1", "a2", "a3"]) {
+    writeFileSync(join(attemptsRoot, id, "summary.md"), `${id} summary\n`, "utf8");
+    assert.equal(slopflow(repo, env, "attempt", "submit", "2", id).status, 0);
+  }
+
+  const selected = slopflow(repo, env, "attempt", "select", "2", "a2", "--reason", "best evidence");
+  assert.equal(selected.status, 0, selected.stderr);
+  assert.match(selected.stdout, /attempt-selection:/);
+  assert.match(selected.stdout, /status: selected/);
+  assert.equal(existsSync(join(repo, ".slopflow", "work", "2", "review.json")), false);
+  assert.equal(existsSync(join(repo, ".slopflow", "work", "2", "completion-note.md")), false);
+
+  const selection = JSON.parse(readFileSync(join(repo, ".slopflow", "work", "2", "selection.json"), "utf8"));
+  assert.equal(selection.selected_attempt_id, "a2");
+  assert.equal(selection.reason, "best evidence");
+  assert.match(selection.selected_at, /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(typeof selection.selected_by, "string");
+  assert.equal(JSON.parse(readFileSync(join(attemptsRoot, "a2", "attempt.json"), "utf8")).status, "selected");
+  assert.equal(JSON.parse(readFileSync(join(attemptsRoot, "a1", "attempt.json"), "utf8")).status, "rejected");
+  assert.equal(JSON.parse(readFileSync(join(attemptsRoot, "a3", "attempt.json"), "utf8")).status, "rejected");
+
+  const conflict = slopflow(repo, env, "attempt", "select", "2", "a1", "--reason", "changed mind");
+  assert.equal(conflict.status, 2);
+  assert.match(conflict.stdout, /Selected attempt already exists/);
+  const forcedSameSelection = slopflow(repo, env, "attempt", "select", "2", "a2", "--reason", "confirmed", "--force");
+  assert.equal(forcedSameSelection.status, 0, forcedSameSelection.stderr);
+  assert.equal(JSON.parse(readFileSync(join(repo, ".slopflow", "work", "2", "selection.json"), "utf8")).reason, "confirmed");
+}));
+
+test("attempt promote copies selected evidence and records artifact-only metadata", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  assert.equal(slopflow(repo, env, "attempt", "create", "2").status, 0);
+  const workDir = join(repo, ".slopflow", "work", "2");
+  const attemptDir = join(workDir, "attempts", "a1");
+  const workspace = JSON.parse(readFileSync(join(attemptDir, "workspace.json"), "utf8"));
+
+  const missingSelection = slopflow(repo, env, "attempt", "promote", "2");
+  assert.equal(missingSelection.status, 2);
+  assert.match(missingSelection.stdout, /Missing selected-attempt decision/);
+
+  writeFileSync(join(workspace.path, "selected-code.txt"), "selected\n", "utf8");
+  assert.equal(run([process.execPath, cliPath, "test", "2", "--attempt", "a1", "--name", "unit", "--", process.execPath, "-e", "process.exit(0)"], workspace.path, false, env).status, 0);
+  writeFileSync(join(attemptDir, "summary.md"), "Selected attempt.\n", "utf8");
+  assert.equal(slopflow(repo, env, "attempt", "submit", "2", "a1").status, 0);
+  assert.equal(slopflow(repo, env, "attempt", "select", "2", "a1", "--reason", "best").status, 0);
+
+  const promoted = slopflow(repo, env, "attempt", "promote", "2");
+  assert.equal(promoted.status, 0, promoted.stderr);
+  assert.match(promoted.stdout, /attempt-promotion:/);
+  assert.match(promoted.stdout, /status: promoted/);
+  assert.match(promoted.stdout, /mode: artifact-only/);
+  assert.match(promoted.stdout, /next-step: cd .*slopflow review 2/);
+
+  const promotion = JSON.parse(readFileSync(join(workDir, "promotion.json"), "utf8"));
+  assert.equal(promotion.promoted_from_attempt_id, "a1");
+  assert.equal(promotion.execution_workspace_path, workspace.path);
+  assert.equal(promotion.promotion_kind, "artifact-only");
+  const status = JSON.parse(readFileSync(join(workDir, "status.json"), "utf8"));
+  assert.equal(status.promoted_from_attempt_id, "a1");
+  assert.equal(status.execution_workspace_path, workspace.path);
+  assert.equal(existsSync(join(workDir, "evidence", "tests.json")), true);
+  assert.equal(JSON.parse(readFileSync(join(workDir, "evidence", "tests.json"), "utf8")).latest.unit.status, "passed");
+  assert.equal(existsSync(join(repo, "selected-code.txt")), false, "promotion must not move code into canonical checkout");
+  assert.equal(existsSync(join(workDir, "review.json")), false);
+  assert.equal(existsSync(join(workDir, "completion-note.md")), false);
+}));
+
+test("promoted review and complete require selected execution workspace", requiresJj, withRepo((repo, env) => {
+  assert.equal(slopflow(repo, env, "init").status, 0);
+  assert.equal(slopflow(repo, env, "start", "2").status, 0);
+  assert.equal(slopflow(repo, env, "attempt", "create", "2").status, 0);
+  const workDir = join(repo, ".slopflow", "work", "2");
+  const attemptDir = join(workDir, "attempts", "a1");
+  const workspace = JSON.parse(readFileSync(join(attemptDir, "workspace.json"), "utf8"));
+  assert.equal(run([process.execPath, cliPath, "test", "2", "--attempt", "a1", "--name", "unit", "--", process.execPath, "-e", "process.exit(0)"], workspace.path, false, env).status, 0);
+  writeFileSync(join(attemptDir, "summary.md"), "Selected attempt.\n", "utf8");
+  assert.equal(slopflow(repo, env, "attempt", "submit", "2", "a1").status, 0);
+  assert.equal(slopflow(repo, env, "attempt", "select", "2", "a1", "--reason", "best").status, 0);
+  assert.equal(slopflow(repo, env, "attempt", "promote", "2").status, 0);
+
+  const blockedReview = slopflow(repo, env, "review", "2");
+  assert.equal(blockedReview.status, 2);
+  assert.match(blockedReview.stdout, /status: blocked/);
+  assert.match(blockedReview.stdout, /execution-workspace:/);
+  assert.match(blockedReview.stdout, /cd .*slopflow review 2/);
+
+  const workspaceReview = run([process.execPath, cliPath, "review", "2"], workspace.path, false, env);
+  assert.equal(workspaceReview.status, 0, workspaceReview.stderr);
+  assert.match(workspaceReview.stdout, /status: pending/);
+
+  writeReview(repo, "2");
+  const blockedComplete = slopflow(repo, env, "complete", "2");
+  assert.equal(blockedComplete.status, 2);
+  assert.match(blockedComplete.stdout, /promoted issue work must be completed/);
+  assert.match(blockedComplete.stdout, /cd .*slopflow complete 2/);
+
+  const workspaceComplete = run([process.execPath, cliPath, "complete", "2"], workspace.path, false, env);
+  assert.equal(workspaceComplete.status, 0, workspaceComplete.stderr);
+  assert.match(workspaceComplete.stdout, /status: complete/);
 }));
 
 test("test refuses missing work directory", requiresJj, withRepo((repo, env) => {
