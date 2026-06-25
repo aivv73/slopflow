@@ -1,6 +1,6 @@
 # Slopflow v0 is a CLI-runbook
 
-Slopflow v0 is a local CLI-runbook and evidence gate, not an autonomous agent orchestrator. It bootstraps controlled work with `slopflow start <issue-id>`, stores canonical issue state under `.slopflow/work/<issue-id>/`, mirrors that contract into Pi goals, and only marks local completion after required evidence and reviewer approval are present.
+Slopflow v0 is a local CLI-runbook and evidence gate, not an autonomous agent orchestrator. It bootstraps controlled work with `slopflow start <provider-native-id>`, stores canonical work item execution state under `.slopflow/work/<work-key>/`, mirrors that contract into Pi goals, and only marks local completion after required evidence and reviewer approval are present.
 
 ## Considered Options
 
@@ -10,8 +10,8 @@ Slopflow v0 is a local CLI-runbook and evidence gate, not an autonomous agent or
 ## Consequences
 
 - `run` is avoided for v0 because it implies execution; `start` means bootstrap only.
-- v0 accepts a plain issue number for the configured repository, but stores a structured issue reference internally.
-- The issue execution contract in `.slopflow/work/<issue-id>/contract.md` is canonical; the Pi goal is a runtime mirror.
+- v0 accepts a plain provider-native ID for the configured repository, but stores a structured work item reference internally.
+- The issue execution contract in `.slopflow/work/<work-key>/contract.md` is canonical; the Pi goal is a runtime mirror.
 - `start` writes `goal-prompt.md` by default; automatic Pi goal creation is opt-in via an explicit flag.
 - `start` creates only real bootstrap artifacts such as `issue.md`, `contract.md`, `status.json`, and `next-steps.md`; evidence, review, and completion files are not placeholder-created.
 - Test evidence is represented by canonical structured `evidence/tests.json` plus raw logs; if tests cannot run, `evidence/test-exception.md` records why and still requires reviewer acceptance.

@@ -10,25 +10,25 @@ Use this skill when working in a repository that uses Slopflow and the agent run
 
 This skill is compatible with Claude Code skill shell execution and with Pi when `pi-skill-interpolation` is installed. The live context below is a snapshot rendered before the model sees the skill. Rerun Slopflow commands before making gate decisions.
 
-For a newly onboarded project, run the `setup-slopflow-skills-live` skill first. It records the repository's issue tracker, triage label vocabulary, and domain documentation layout in `docs/agents/*.md` before this execution workflow starts issue work.
+For a newly onboarded project, run the `setup-slopflow-skills-live` skill first. It records the repository's issue tracker, triage label vocabulary, and domain documentation layout in `docs/agents/*.md` before this execution workflow starts work item execution.
 
 If shell execution is disabled by policy, treat the live context as unavailable and run the read-only inspection commands manually.
 
 ## What it does
 
-- Injects a read-only snapshot of current Slopflow, Jujutsu, work artifact, domain, and ADR context before the model sees the skill.
+- Injects a read-only snapshot of current Slopflow, configured VCS, work artifact, domain, and ADR context before the model sees the skill.
 - Keeps issue execution scoped to Slopflow's local artifacts and gates.
-- Starts issue work with `slopflow start <issue-id>`.
-- Records test evidence with `slopflow test <issue-id> --name <gate> -- <command...>`.
+- Starts work item intake with `slopflow start <provider-native-id>`.
+- Records test evidence with `slopflow test <work-key-or-provider-native-id> --name <gate> -- <command...>`.
 - Coordinates parallel agent attempts through artifacts, isolated execution workspaces, comparison, selection, and artifact-only promotion without controlling agent processes.
 - Supports local lifecycle state with `pause`, `resume`, and `cancel` without controlling an agent runtime.
-- Prepares review packets with `slopflow review <issue-id>` without self-approval.
-- Completes work only through `slopflow complete <issue-id>` after test evidence and reviewer approval.
+- Prepares review packets with `slopflow review <work-key-or-provider-native-id>` without self-approval.
+- Completes work only through `slopflow complete <work-key-or-provider-native-id>` after test evidence and reviewer approval.
 
 ## Live context
 
 - Slopflow status: !`slopflow status 2>&1 || true`
-- Jujutsu status: !`jj --no-pager status 2>&1 || true`
+- VCS status: !`if test -d .jj && command -v jj >/dev/null 2>&1; then jj --no-pager status; elif command -v git >/dev/null 2>&1; then git status --short --branch; else echo 'no supported VCS tool found'; fi 2>&1 || true`
 - Active Slopflow work files: !`find .slopflow/work -maxdepth 5 -type f 2>/dev/null | sort | sed -n '1,200p' || true`
 - Attempt workspace pointer: !`test -f .slopflow-attempt.json && cat .slopflow-attempt.json || true`
 - Agent setup docs: !`for file in docs/agents/issue-tracker.md docs/agents/triage-labels.md docs/agents/domain.md; do test -f "$file" && echo "present: $file" || echo "missing: $file"; done`
@@ -39,7 +39,7 @@ Interpolation requires the `allowed-tools` frontmatter above. Without a Bash per
 
 ## Core rule
 
-The Slopflow CLI output and `.slopflow/work/<issue-id>/` artifacts are canonical. Live context is advisory and may be stale after any change. Do not manually invent, rewrite, or bypass Slopflow artifacts when a CLI command exists for that step.
+The Slopflow CLI output and `.slopflow/work/<work-key>/` artifacts are canonical. Live context is advisory and may be stale after any change. Do not manually invent, rewrite, or bypass Slopflow artifacts when a CLI command exists for that step.
 
 Slopflow is a CLI-runbook, not an agent runtime. Agent attempts are Slopflow-owned artifacts for coordinating independent work across a canonical repository and isolated execution workspaces. Use only attempt commands exposed by the installed CLI.
 
@@ -59,17 +59,17 @@ Slopflow is a CLI-runbook, not an agent runtime. Agent attempts are Slopflow-own
    slopflow init
    ```
 
-4. Start scoped issue work:
+4. Start scoped work item intake:
 
    ```bash
-   slopflow start <issue-id>
+   slopflow start <provider-native-id>
    ```
 
 5. Read the canonical contract and goal prompt:
 
    ```text
-   .slopflow/work/<issue-id>/contract.md
-   .slopflow/work/<issue-id>/goal-prompt.md
+   .slopflow/work/<work-key>/contract.md
+   .slopflow/work/<work-key>/goal-prompt.md
    ```
 
 6. Implement only the contract scope. Preserve existing behavior unless the issue execution contract explicitly changes it.
@@ -77,15 +77,15 @@ Slopflow is a CLI-runbook, not an agent runtime. Agent attempts are Slopflow-own
 7. Capture command-based quality evidence through Slopflow:
 
    ```bash
-   slopflow test <issue-id> --name <gate> -- <command...>
+   slopflow test <work-key-or-provider-native-id> --name <gate> -- <command...>
    ```
 
 8. Pause, resume, or cancel local issue work only when the issue lifecycle calls for it:
 
    ```bash
-   slopflow pause <issue-id> --reason <text>
-   slopflow resume <issue-id>
-   slopflow cancel <issue-id> --reason <text>
+   slopflow pause <work-key-or-provider-native-id> --reason <text>
+   slopflow resume <work-key-or-provider-native-id>
+   slopflow cancel <work-key-or-provider-native-id> --reason <text>
    ```
 
    These commands preserve artifacts and update local lifecycle state. They must not be treated as process control, VCS cleanup, issue closure, or automatic continuation.
@@ -93,7 +93,7 @@ Slopflow is a CLI-runbook, not an agent runtime. Agent attempts are Slopflow-own
 9. Prepare a review packet and inspect reviewer verdict state:
 
    ```bash
-   slopflow review <issue-id>
+   slopflow review <work-key-or-provider-native-id>
    ```
 
 10. Do not write `review.json` unless you are acting as a separate human or agent reviewer. The implementer must not self-approve by writing their own reviewer verdict.
@@ -101,7 +101,7 @@ Slopflow is a CLI-runbook, not an agent runtime. Agent attempts are Slopflow-own
 11. Complete only through Slopflow gates:
 
    ```bash
-   slopflow complete <issue-id>
+   slopflow complete <work-key-or-provider-native-id>
    ```
 
 12. Report the Slopflow artifacts, tests, review verdict, and completion note in the final response.
@@ -113,16 +113,16 @@ Use this flow only when the installed Slopflow CLI exposes `attempt` commands. D
 1. Create isolated agent attempts from an already-started issue work directory:
 
    ```bash
-   slopflow attempt create <issue-id> --count <n>
-   slopflow attempt list <issue-id>
+   slopflow attempt create <work-key-or-provider-native-id> --count <n>
+   slopflow attempt list <work-key-or-provider-native-id>
    ```
 
-   The canonical repository owns `.slopflow/work/<issue-id>/` artifacts. Each agent attempt has `.slopflow/work/<issue-id>/attempts/<attempt-id>/` artifacts and an isolated execution workspace. The execution workspace is where code is edited, tested, reviewed, and completed after promotion.
+   The canonical repository owns `.slopflow/work/<work-key>/` artifacts. Each agent attempt has `.slopflow/work/<work-key>/attempts/<attempt-id>/` artifacts and an isolated execution workspace. The execution workspace is where code is edited, tested, reviewed, and completed after promotion.
 
 2. In an attempt workspace, follow the attempt prompt and record attempt-scoped evidence:
 
    ```bash
-   slopflow test <issue-id> --attempt <attempt-id> --name <gate> -- <command...>
+   slopflow test <work-key-or-provider-native-id> --attempt <attempt-id> --name <gate> -- <command...>
    ```
 
    Attempt-scoped evidence is written back to canonical attempt artifacts through `.slopflow-attempt.json`. It does not satisfy canonical completion gates until the selected attempt is promoted.
@@ -130,7 +130,7 @@ Use this flow only when the installed Slopflow CLI exposes `attempt` commands. D
 3. Before submitting an attempt, write the attempt summary requested by Slopflow, then submit:
 
    ```bash
-   slopflow attempt submit <issue-id> <attempt-id>
+   slopflow attempt submit <work-key-or-provider-native-id> <attempt-id>
    ```
 
    Do not treat an implementation summary as reviewer approval.
@@ -138,8 +138,8 @@ Use this flow only when the installed Slopflow CLI exposes `attempt` commands. D
 4. Compare submitted attempts and select one explicitly:
 
    ```bash
-   slopflow attempt compare <issue-id>
-   slopflow attempt select <issue-id> <attempt-id> --reason "<why this attempt should continue>"
+   slopflow attempt compare <work-key-or-provider-native-id>
+   slopflow attempt select <work-key-or-provider-native-id> <attempt-id> --reason "<why this attempt should continue>"
    ```
 
    Slopflow does not choose the best attempt automatically. Selection records a decision; it does not approve, promote, complete, or move code.
@@ -147,7 +147,7 @@ Use this flow only when the installed Slopflow CLI exposes `attempt` commands. D
 5. Promote the selected attempt before ordinary review/completion gates:
 
    ```bash
-   slopflow attempt promote <issue-id>
+   slopflow attempt promote <work-key-or-provider-native-id>
    ```
 
    Promotion is artifact-only: it copies or references selected attempt evidence and records the selected execution workspace. It must not be treated as merge, cherry-pick, patch application, publish, approval, or completion. After promotion, run `review` and `complete` from the selected execution workspace.
@@ -155,7 +155,7 @@ Use this flow only when the installed Slopflow CLI exposes `attempt` commands. D
 6. Abandon stopped attempts explicitly and preserve their artifacts:
 
    ```bash
-   slopflow attempt abandon <issue-id> <attempt-id> --reason <text>
+   slopflow attempt abandon <work-key-or-provider-native-id> <attempt-id> --reason <text>
    ```
 
 ## Interpolation safety
@@ -180,20 +180,20 @@ The interpolation commands in this skill are read-only inspection commands. They
 ```text
 slopflow init
 slopflow status
-slopflow start <issue-id>
-slopflow pause <issue-id> --reason <text>
-slopflow resume <issue-id>
-slopflow cancel <issue-id> --reason <text>
-slopflow test <issue-id> --name <gate> -- <command...>
-slopflow test <issue-id> --attempt <attempt-id> --name <gate> -- <command...>
-slopflow attempt create <issue-id> [--count <n>]
-slopflow attempt list <issue-id>
-slopflow attempt status <issue-id> [attempt-id]
-slopflow attempt submit <issue-id> <attempt-id>
-slopflow attempt abandon <issue-id> <attempt-id> --reason <text>
-slopflow attempt compare <issue-id>
-slopflow attempt select <issue-id> <attempt-id> --reason <text>
-slopflow attempt promote <issue-id>
-slopflow review <issue-id>
-slopflow complete <issue-id>
+slopflow start <provider-native-id>
+slopflow pause <work-key-or-provider-native-id> --reason <text>
+slopflow resume <work-key-or-provider-native-id>
+slopflow cancel <work-key-or-provider-native-id> --reason <text>
+slopflow test <work-key-or-provider-native-id> --name <gate> -- <command...>
+slopflow test <work-key-or-provider-native-id> --attempt <attempt-id> --name <gate> -- <command...>
+slopflow attempt create <work-key-or-provider-native-id> [--count <n>]
+slopflow attempt list <work-key-or-provider-native-id>
+slopflow attempt status <work-key-or-provider-native-id> [attempt-id]
+slopflow attempt submit <work-key-or-provider-native-id> <attempt-id>
+slopflow attempt abandon <work-key-or-provider-native-id> <attempt-id> --reason <text>
+slopflow attempt compare <work-key-or-provider-native-id>
+slopflow attempt select <work-key-or-provider-native-id> <attempt-id> --reason <text>
+slopflow attempt promote <work-key-or-provider-native-id>
+slopflow review <work-key-or-provider-native-id>
+slopflow complete <work-key-or-provider-native-id>
 ```

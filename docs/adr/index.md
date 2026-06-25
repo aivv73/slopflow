@@ -21,3 +21,4 @@ Concise map of Slopflow's architectural decision records.
 - [ADR 0008 — CLI output follows AXI principles](0008-cli-output-follows-axi-principles.md): default CLI output should be compact, structured, contextual, and bounded by Slopflow's runbook scope.
 - [ADR 0009 — Agent docs use OKF; runtime artifacts remain Slopflow artifacts](0009-agent-docs-use-okf-runtime-artifacts-remain-slopflow-artifacts.md): repository agent docs use OKF conventions while `.slopflow/work/` remains CLI-owned runtime state.
 - [ADR 0010 — Parallel agent work is artifact coordination](0010-parallel-agent-work-is-artifact-coordination.md): core Slopflow coordinates isolated agent-attempt artifacts while harness packs may launch agents.
+- [ADR 0011 — Provider-neutral issue intake uses adapter-backed work items](0011-provider-neutral-issue-intake.md): issue intake reads provider-hosted work items through adapters while local contracts remain the source of truth.

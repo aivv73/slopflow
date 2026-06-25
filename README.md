@@ -16,7 +16,7 @@ Coding agents are useful, but a model saying “done” is not a completion cont
 
 - initialize a repository workflow contract
 - install harness-specific skills, extensions, and agent roles
-- start work from a GitHub issue or pull request
+- start work from a configured issue tracker provider's work item
 - record test evidence instead of merely claiming tests passed
 - prepare review packets
 - block local completion until evidence and review gates pass
@@ -29,7 +29,7 @@ Slopflow is for people who use coding agents across repositories and want the wo
 
 It is especially useful if you:
 
-- work from GitHub issues or PRs
+- work from issue tracker provider work items such as GitHub issues/PRs or GitLab issues/MRs
 - want agents to record evidence instead of merely reporting success
 - use Pi, Claude Code, or Agent Skills-compatible tooling
 - prefer project-local configuration over global harness mutation
@@ -58,7 +58,7 @@ start -> test -> review -> complete
 
 The model can work, but Slopflow owns the lifecycle artifacts and gates.
 
-### 3. Adapters
+### 3. Harnesses and integrations
 
 Slopflow connects the workflow to harnesses and tools:
 
@@ -67,9 +67,22 @@ Slopflow connects the workflow to harnesses and tools:
 - generic Agent Skills-compatible tools
 - Jujutsu (`jj`, recommended)
 - Git
-- GitHub
+- issue tracker providers such as GitHub and GitLab
 - `pi-subagents`
 - `pi-codex-goal`
+
+## Recommended harnesses
+
+Slopflow is harness-independent.
+
+It has workflow packs for:
+
+- Pi
+- Oh My Pi
+- Claude Code
+- generic Agent Skills-compatible environments
+
+The best experience today is with Oh My Pi, which provides an excellent interactive execution environment while Slopflow manages contracts, evidence, and review.
 
 ## Quick start
 
@@ -81,49 +94,37 @@ Install the CLI:
 npm install -g slopflow
 ```
 
-From the repository you want agents to work in:
+From the repository you want agents to work in, the shortest happy path is:
 
 ```bash
 slopflow init
+slopflow install --harness pi --yes
+slopflow doctor
+slopflow start 42
+slopflow test 42 --name unit -- npm test
+slopflow review 42
 ```
 
-The current issue workflow supports Git and Jujutsu (`jj`) repositories. Jujutsu is recommended for the smoothest local change/workspace workflow, but it is not required; `slopflow doctor` reports missing prerequisites and setup gaps.
+The current work item workflow supports Git and Jujutsu (`jj`) repositories. Jujutsu is recommended for the smoothest local change/workspace workflow, but it is not required; `slopflow doctor` reports missing prerequisites and setup gaps.
 
-Install a workflow pack. Dry-run is the default:
+Use `install` without `--yes` when you want to review the workflow-pack plan before writing files:
 
 ```bash
 slopflow install --harness pi
 ```
 
-Apply after reviewing the plan:
-
-```bash
-slopflow install --harness pi --yes
-```
-
 Other supported harnesses:
 
 ```bash
+slopflow install --harness omp --yes
 slopflow install --harness claude-code --yes
 slopflow install --harness generic --yes
 ```
 
-Check readiness:
-
-```bash
-slopflow doctor
-```
-
-Start controlled work for an issue:
-
-```bash
-slopflow start 42
-```
-
-Then follow the generated artifacts under:
+New starts use a generated work key, so the generated artifacts live under a path such as:
 
 ```text
-.slopflow/work/42/
+.slopflow/work/github-owner-name-issue-42-1a2b3c4d/
 ```
 
 ## What Slopflow writes
@@ -138,6 +139,21 @@ Creates the minimal Slopflow contract:
 ```
 
 Existing incompatible `.slopflow/config.json` blocks unless rerun with explicit `--force`.
+
+The default issue tracker config is GitHub, but issue intake is provider-shaped:
+
+```json
+{
+  "issue_tracker": {
+    "provider": "gitlab",
+    "repository": "group/project",
+    "base_url": "https://gitlab.example.com",
+    "prs_as_request_surface": true
+  }
+}
+```
+
+`base_url` is optional for default hosted providers such as `https://github.com` and `https://gitlab.com`.
 
 ### `slopflow install --harness pi`
 
@@ -165,10 +181,10 @@ The local Slopflow Pi extension registers:
 ```text
 /slopflow-status
 /slopflow-doctor
-/slopflow-create-goal <issue-id>
+/slopflow-create-goal <provider-native-id>
 ```
 
-`/slopflow-create-goal <issue-id>` runs `slopflow start`, reads the generated `goal-prompt.md`, and pre-fills `pi-codex-goal`’s `/create-goal` prompt for user review. Codex-specific conversion helpers are runtime adapters and are not installed by default.
+`/slopflow-create-goal <provider-native-id>` runs `slopflow start`, reads the generated `goal-prompt.md`, and pre-fills `pi-codex-goal`’s `/create-goal` prompt for user review. Codex-specific conversion helpers are runtime adapters and are not installed by default.
 
 The installed Pi subagent roles are:
 
@@ -178,6 +194,8 @@ The installed Pi subagent roles are:
 
 
 ### `slopflow install --harness omp`
+
+Slopflow installs capabilities, not a specific tool stack.
 
 Installs an Oh My Pi workflow profile under:
 
@@ -240,21 +258,25 @@ Deprecated setup commands:
 slopflow status
 ```
 
-### Start issue work
+### Start work item work
 
 ```bash
 slopflow start 42
 ```
 
-`start` creates canonical bootstrap artifacts:
+`start` reads one work item from the configured issue tracker provider and creates canonical bootstrap artifacts:
 
 ```text
-.slopflow/work/42/issue.md
-.slopflow/work/42/contract.md
-.slopflow/work/42/status.json
-.slopflow/work/42/goal-prompt.md
-.slopflow/work/42/next-steps.md
+.slopflow/work/<work-key>/work-item.json
+.slopflow/work/<work-key>/tracked-item.json
+.slopflow/work/<work-key>/issue.md
+.slopflow/work/<work-key>/contract.md
+.slopflow/work/<work-key>/status.json
+.slopflow/work/<work-key>/goal-prompt.md
+.slopflow/work/<work-key>/next-steps.md
 ```
+
+`work-item.json` is the one-shot provider intake snapshot. `tracked-item.json` is still written as a legacy compatibility filename. After start, `contract.md` is the local source of truth; Slopflow does not silently synchronize provider edits into existing work.
 
 It does not create placeholder evidence, review, or completion files.
 
@@ -278,86 +300,28 @@ slopflow test 42 --name typecheck -- npm run build
 `test` writes structured evidence and raw logs under:
 
 ```text
-.slopflow/work/42/evidence/
+.slopflow/work/<work-key>/evidence/
 ```
 
 Then it returns the wrapped command’s exit code.
 
 ### Coordinate agent attempts
 
-For parallel agent work, Slopflow coordinates **agent attempts** as artifacts and isolated execution workspaces. Core Slopflow does not launch or supervise agents; it prepares attempt directories, workspaces, evidence targets, comparison packets, selection records, and promotion metadata.
+For parallel agent work, Slopflow coordinates **agent attempts** as artifacts and isolated execution workspaces. Core Slopflow does not launch or supervise agents.
 
-Create attempts for an already-started issue:
+Minimal flow:
 
 ```bash
 slopflow attempt create 42 --count 3
 slopflow attempt list 42
-slopflow attempt status 42 a1
-```
-
-Each attempt stores artifacts under:
-
-```text
-.slopflow/work/42/attempts/a1/
-  attempt.json
-  workspace.json
-  goal-prompt.md
-  summary.md
-  evidence/
-```
-
-`attempt create` creates an isolated version-control workspace by default and writes a pointer in that workspace:
-
-```text
-.slopflow-attempt.json
-```
-
-The pointer lets Slopflow commands run from the attempt workspace while writing evidence back to the canonical repository’s `.slopflow/work/<issue-id>/` artifacts.
-
-Record attempt-scoped evidence from the attempt workspace:
-
-```bash
 slopflow test 42 --attempt a1 --name unit -- npm test
-```
-
-Attempt-scoped evidence is written under the selected attempt, not canonical issue evidence, and does not satisfy completion gates until the attempt is selected and promoted.
-
-Submit, compare, select, and promote attempts:
-
-```bash
 slopflow attempt submit 42 a1
 slopflow attempt compare 42
 slopflow attempt select 42 a1 --reason "best evidence and smallest diff"
 slopflow attempt promote 42
 ```
 
-Selection records an auditable decision. Promotion is artifact-only: it copies or references selected attempt evidence and records the selected execution workspace. It does not merge, cherry-pick, apply patches, push, publish, create a PR, approve review, or complete work.
-
-After promotion, run review and completion from the selected execution workspace:
-
-```bash
-cd /path/to/selected/attempt/workspace
-slopflow review 42
-slopflow complete 42
-```
-
-If invoked from the canonical repository checkout after promotion, review and completion block with a next step pointing to the selected execution workspace.
-
-Attempts can be abandoned without deleting their artifacts:
-
-```bash
-slopflow attempt abandon 42 a2 --reason "superseded by a1"
-```
-
-By default attempt workspaces live outside the canonical repository under a sibling workspace root. `.slopflow/config.json` includes:
-
-```json
-{
-  "workspace_root": ".slopflow-workspaces"
-}
-```
-
-Relative `workspace_root` values resolve next to the canonical repository, not inside it.
+Promotion is artifact-only: it does not merge, cherry-pick, apply patches, push, publish, approve review, or complete work. See [Agent attempts](docs/attempts.md) for the full attempt lifecycle, artifact layout, selected execution workspace rules, and abandon flow.
 
 ### Prepare review
 
@@ -368,7 +332,7 @@ slopflow review 42
 `review` writes:
 
 ```text
-.slopflow/work/42/review-packet.md
+.slopflow/work/<work-key>/review-packet.md
 ```
 
 It does not self-approve and does not create `review.json`. A separate human or agent reviewer must write the verdict.
@@ -395,7 +359,7 @@ status:
   vcs: jj
   artifact-root: .slopflow/work
   current-vcs-state: zsuskvpx 5a9ba73d main* | Add feature
-  next-step: slopflow start <issue-id>
+  next-step: slopflow start <provider-native-id>
 ```
 
 Example structured error output:
@@ -440,12 +404,12 @@ doctor:
   recommended: warn
   failed-count: 0
   warning-count: 1
-  next-step: run npx -y gh-axi --help when GitHub AXI operations are needed
+  next-step: install glab or continue if GitLab issue intake is not needed
 checks[...]:
   core.node: passed node v26.1.0 satisfies >=24
   core.vcs-tool: passed jj executable found
   recommended.jj: passed jj executable found
-  recommended.gh-axi: warn unchecked; run npx -y gh-axi --help when GitHub AXI operations are needed
+  recommended.glab: warn glab executable missing; GitLab issue intake may fail
 ```
 
 Severity rules:
@@ -489,24 +453,24 @@ These conventions are not decoration. They are part of the outer loop: agents ne
 slopflow init [--force]
 slopflow status [--json]
 slopflow doctor [--json]
-slopflow install --harness pi|claude-code|generic [--yes] [--force]
+slopflow install --harness pi|omp|claude-code|generic [--yes] [--force]
 slopflow skill lint
-slopflow start <issue-id>
-slopflow attempt create <issue-id> [--count <n>]
-slopflow attempt list <issue-id>
-slopflow attempt status <issue-id> [attempt-id]
-slopflow attempt submit <issue-id> <attempt-id>
-slopflow attempt abandon <issue-id> <attempt-id> --reason <text>
-slopflow attempt compare <issue-id>
-slopflow attempt select <issue-id> <attempt-id> --reason <text>
-slopflow attempt promote <issue-id>
-slopflow pause <issue-id> --reason <text>
-slopflow resume <issue-id>
-slopflow cancel <issue-id> --reason <text>
-slopflow test <issue-id> --name <gate> -- <command...>
-slopflow test <issue-id> --attempt <attempt-id> --name <gate> -- <command...>
-slopflow review <issue-id>
-slopflow complete <issue-id>
+slopflow start <provider-native-id> [--provider <provider> --repository <owner/name> --base-url <url> --kind issue --id <id>]
+slopflow attempt create <work-key-or-provider-native-id> [--count <n>]
+slopflow attempt list <work-key-or-provider-native-id>
+slopflow attempt status <work-key-or-provider-native-id> [attempt-id]
+slopflow attempt submit <work-key-or-provider-native-id> <attempt-id>
+slopflow attempt abandon <work-key-or-provider-native-id> <attempt-id> --reason <text>
+slopflow attempt compare <work-key-or-provider-native-id>
+slopflow attempt select <work-key-or-provider-native-id> <attempt-id> --reason <text>
+slopflow attempt promote <work-key-or-provider-native-id>
+slopflow pause <work-key-or-provider-native-id> --reason <text>
+slopflow resume <work-key-or-provider-native-id>
+slopflow cancel <work-key-or-provider-native-id> --reason <text>
+slopflow test <work-key-or-provider-native-id> --name <gate> -- <command...>
+slopflow test <work-key-or-provider-native-id> --attempt <attempt-id> --name <gate> -- <command...>
+slopflow review <work-key-or-provider-native-id>
+slopflow complete <work-key-or-provider-native-id>
 ```
 
 ## Development
