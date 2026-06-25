@@ -21,8 +21,20 @@ The canonical local Slopflow artifact that records the issue summary, acceptance
 _Avoid_: Goal, plan, checklist
 
 **Issue reference**:
-A structured identifier for the configured issue tracker item, including provider, repository, number, and whether the item is an issue or pull request.
-_Avoid_: Bare issue id, ticket string
+A structured identifier for the configured issue tracker item, including provider, repository, item kind, and provider-native item id. The provider-native item id is an opaque string, even when a provider displays numeric issue numbers.
+_Avoid_: Bare issue id, ticket string, work directory name
+
+**Issue tracker provider**:
+The external system that hosts tracked work items Slopflow can read for issue intake, such as GitHub, GitLab, Forgejo, or Gitea.
+_Avoid_: Forge, GitHub dependency, VCS provider
+
+**Tracked item**:
+A provider-hosted work request that can be read into a local issue execution contract. For issue intake, a tracked item includes the provider description and chronological comments so discussion context can inform the local contract.
+_Avoid_: Slopflow issue, work directory, local task
+
+**Issue intake**:
+The one-shot Slopflow capability that reads one tracked item from an issue tracker provider and creates the local issue execution contract. After intake, the issue execution contract is the local source of truth; provider item edits do not implicitly update it.
+_Avoid_: Forge integration, triage client, synchronization, live sync
 
 **Goal mirror**:
 An agent-harness persistent goal created from the issue execution contract so the active coding session keeps the same objective in context.
@@ -31,8 +43,8 @@ _Avoid_: Canonical contract, source of truth
 By default, `start` writes a `goal-prompt.md` artifact for creating a goal mirror. Automatic native goal creation is opt-in and depends on the active agent harness.
 
 **Work directory**:
-The `.slopflow/work/<issue-id>/` directory that stores the local contract, evidence, reviewer verdict, status metadata, and completion note for one issue.
-_Avoid_: Run directory, scratch folder, cache
+The `.slopflow/work/<work-key>/` directory that stores the local contract, evidence, reviewer verdict, status metadata, and completion note for one issue execution.
+_Avoid_: Run directory, scratch folder, cache, issue reference
 
 Only real artifacts are stored in a work directory. Missing evidence, review, or completion files mean the corresponding gate has not been satisfied.
 
