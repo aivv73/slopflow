@@ -36,6 +36,64 @@ _Avoid_: Run directory, scratch folder, cache
 
 Only real artifacts are stored in a work directory. Missing evidence, review, or completion files mean the corresponding gate has not been satisfied.
 
+**Canonical repository**:
+The repository checkout that owns `.slopflow/config.json` and canonical `.slopflow/work/<issue-id>/` artifacts.
+_Avoid_: Source repo, main checkout, original repo
+
+Artifact reads and writes resolve through the canonical repository, even when commands are invoked from an isolated attempt workspace.
+
+**Execution workspace**:
+The repository workspace whose code state is being tested, reviewed, or completed for an issue or attempt.
+_Avoid_: Working directory, sandbox, run directory
+
+In normal issue work, the canonical repository and execution workspace are the same checkout. In promoted parallel-attempt work, the canonical repository owns Slopflow artifacts while the selected attempt workspace is the execution workspace.
+After parallel-attempt promotion, review and completion gates must be invoked from the selected execution workspace so VCS status, diffs, and command context match the promoted code state.
+
+**Agent attempt**:
+An isolated, reviewable attempt by one agent or agent session to satisfy one issue execution contract without overwriting other attempts for the same issue.
+_Avoid_: Run, parallel run, agent job
+
+Agent attempts are coordination artifacts, not managed agent processes. The initial agent-attempt slice creates attempt artifacts and prompts; later parallel-attempt slices may add workspaces, evidence locations, locks, comparison, selection records, and harness-specific launch integrations.
+
+Agent attempt lifecycle statuses are `created`, `active`, `submitted`, `selected`, `rejected`, and `abandoned`. `complete` remains reserved for local issue work completion, and failed quality gates belong in attempt evidence rather than an attempt lifecycle status.
+
+In the first design, agent attempt ids are issue-local sequential identifiers such as `a1`, `a2`, and `a3`, allocated while holding the issue work lock.
+Each agent attempt stores `attempt.json`, `goal-prompt.md`, optional evidence, and a required `summary.md` before submission. Later workspace-capable attempts also store `workspace.json`. Attempt submission blocks when `summary.md` is missing so submitted attempts have a human-readable account of the work.
+
+**Selected attempt**:
+The single agent attempt chosen as the basis for continuing canonical issue work after comparing submitted attempts.
+_Avoid_: Winner, canonical run, best agent
+
+Selection records the decision to continue from one attempt; it does not by itself publish, merge, approve, or complete the issue work.
+
+**Attempt comparison**:
+A bounded review aid that summarizes submitted agent attempts for one issue so a human or reviewer agent can choose a selected attempt.
+_Avoid_: Review verdict, approval, ranking engine
+
+Attempt comparison is planned after attempt-scoped evidence exists. It may summarize attempt status, summaries, evidence, workspace metadata, changed files, and bounded diff excerpts. It does not select, approve, or complete an attempt by itself.
+
+**Promote attempt**:
+The Slopflow action that applies the selected attempt's artifacts and workspace state as the basis for canonical issue work after selection.
+_Avoid_: Select, merge, approve, complete
+
+Selecting an attempt records a decision; promoting an attempt performs the artifact and version-control preparation needed for ordinary review and completion gates to continue from that selected attempt.
+In the planned parallel-attempt design, promotion is artifact promotion only: it does not automatically merge, cherry-pick, apply patches, publish, or otherwise move code changes between version-control workspaces.
+After workspace-capable promotion, canonical issue work continues in the selected attempt workspace. Canonical artifacts record the promoted attempt and selected workspace path so later review and completion gates can evaluate the code state that produced the promoted evidence.
+
+**Attempt workspace**:
+An isolated version-control workspace associated with one agent attempt so concurrent agents can edit files without sharing a working tree.
+_Avoid_: Scratch clone, temporary checkout, agent sandbox
+
+When attempt workspaces are enabled, each attempt workspace contains a `.slopflow-attempt.json` pointer that identifies the canonical repository, issue id, and attempt id. Slopflow artifacts remain in the canonical repository, while wrapped commands invoked from an attempt workspace run in that workspace and record evidence back to the canonical attempt artifacts.
+
+**Attempt lock**:
+A local artifact lock that protects one agent attempt's Slopflow artifacts from concurrent mutation.
+_Avoid_: Process lock, agent lease, distributed lock
+
+Attempt locks protect artifact writes; they do not prove an agent process is alive or grant ownership of repository-wide work.
+
+Planned parallel attempt coordination uses local filesystem artifact locks with three scopes: issue work locks for issue-level artifact mutation, attempt locks for one attempt's artifacts and evidence, and selection locks for the selected-attempt decision. Stale lock recovery is explicit and requires a force-style override.
+
 **Complete**:
 The Slopflow action that marks local issue work complete only after required evidence and reviewer approval are present.
 _Avoid_: Publish, push, merge, close issue
@@ -96,6 +154,7 @@ By default, it returns the wrapped command's exit code even when failure evidenc
 In v0, wrapped commands run from the repository root for reproducibility; package-specific commands must encode their own working-directory behavior.
 Raw test logs include a metadata header plus separate stdout and stderr sections so each log is useful as standalone review evidence.
 It refuses to run unless the issue work directory and `status.json` already exist, because evidence must attach to a started issue execution contract.
+When attempt-scoped test evidence is implemented, it does not by itself satisfy canonical completion gates; selected attempt evidence must first be promoted or otherwise represented in canonical issue evidence.
 
 **Review command**:
 The Slopflow action that prepares a review packet and reports whether a reviewer verdict exists and approves completion.
