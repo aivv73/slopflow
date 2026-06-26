@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { readdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
-import { defaultBaseUrl, normalizeBaseUrl, normalizeIssueReference } from "./issue-model.js";
-import type { ArtifactLockScope, IssueReference, MachineConfig, SupportedVcs, TestEvidence, WorkStatus } from "./types.js";
+import { defaultBaseUrl, normalizeBaseUrl, normalizeWorkItemReference } from "./issue-model.js";
+import type { ArtifactLockScope, WorkItemReference, MachineConfig, SupportedVcs, TestEvidence, WorkStatus } from "./types.js";
 import { DEFAULT_ARTIFACT_ROOT, DEFAULT_PRS_AS_REQUEST_SURFACE, SCHEMA_VERSION } from "./types.js";
 import { SlopflowError } from "./types.js";
 
@@ -19,8 +19,8 @@ export function resolveWorkDir(root: string, config: MachineConfig, issueId: str
     const statusPath = join(candidate, "status.json");
     if (!existsSync(statusPath)) continue;
     try {
-      const status = readJson(statusPath) as { issue?: IssueReference; work_key?: string };
-      const issue = normalizeIssueReference(status.issue);
+      const status = readJson(statusPath) as { issue?: WorkItemReference; work_key?: string };
+      const issue = normalizeWorkItemReference(status.issue);
       if (status.work_key === issueId) return candidate;
       if (issue.id === issueId || issue.number === Number(issueId)) matches.push(candidate);
     } catch {

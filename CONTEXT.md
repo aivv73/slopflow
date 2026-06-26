@@ -13,27 +13,39 @@ A command-line workflow guide that prepares state, records evidence, checks gate
 _Avoid_: Autonomous orchestrator, background agent, daemon
 
 **Start**:
-The Slopflow action that bootstraps controlled work for an existing issue by preparing local artifacts, associating work with the configured VCS repository, and producing next-step instructions. Jujutsu is recommended, but Git is supported.
+The Slopflow action that bootstraps controlled work for an existing work item by preparing local artifacts, associating work with the configured VCS repository, and producing next-step instructions. Jujutsu is recommended, but Git is supported.
 _Avoid_: Run, execute, implement
 
 **Issue execution contract**:
-The canonical local Slopflow artifact that records the issue summary, acceptance criteria, constraints, out-of-scope items, quality gates, blocked-stop conditions, and completion criteria for one issue.
+The canonical local Slopflow artifact that records the issue summary, acceptance criteria, constraints, out-of-scope items, quality gates, blocked-stop conditions, and completion criteria for one work item.
 _Avoid_: Goal, plan, checklist
 
-**Issue reference**:
-A structured identifier for the configured issue tracker item, including provider, repository, item kind, and provider-native item id. The provider-native item id is an opaque string, even when a provider displays numeric issue numbers.
-_Avoid_: Bare issue id, ticket string, work directory name
-
 **Issue tracker provider**:
-The external system that hosts tracked work items Slopflow can read for issue intake, such as GitHub, GitLab, Forgejo, or Gitea.
+The external system that hosts work items Slopflow can read for issue intake, such as GitHub, GitLab, Forgejo, or Gitea.
 _Avoid_: Forge, GitHub dependency, VCS provider
 
-**Tracked item**:
-A provider-hosted work request that can be read into a local issue execution contract. For issue intake, a tracked item includes the provider description and chronological comments so discussion context can inform the local contract.
+**Work item**:
+A provider-hosted work request that can be read into a local issue execution contract. A work item has an issue tracker provider, repository or project, work item kind, provider-native ID, title, description, chronological comments, labels, state, and URL.
 _Avoid_: Slopflow issue, work directory, local task
 
+**Work item kind**:
+The provider object type for a work item, such as `issue`, `pull_request`, or `merge_request`. Kind is separate from the issue tracker provider and provider-native ID.
+_Avoid_: Provider, label, work key
+
+**Provider-native ID**:
+The identifier assigned by the issue tracker provider to a work item, such as a GitHub issue or pull request number, or a GitLab issue or merge request IID. It is stored as an opaque string even when the provider displays a number.
+_Avoid_: Work key, local issue id, directory name
+
+**Work item reference**:
+A structured identifier for a work item: issue tracker provider, base URL, repository or project, work item kind, provider-native ID, and optional provider URL.
+_Avoid_: Bare issue id, ticket string, work directory name
+
+**Work key**:
+The local storage key used in `.slopflow/work/<work-key>/`. New work keys are generated from the work item reference plus a short hash, and are not the same concept as a provider-native ID.
+_Avoid_: Provider-native ID, issue number, reference
+
 **Issue intake**:
-The one-shot Slopflow capability that reads one tracked item from an issue tracker provider and creates the local issue execution contract. After intake, the issue execution contract is the local source of truth; provider item edits do not implicitly update it.
+The one-shot Slopflow capability that reads one work item from an issue tracker provider and creates the local issue execution contract. After intake, the issue execution contract is the local source of truth; provider item edits do not implicitly update it.
 _Avoid_: Forge integration, triage client, synchronization, live sync
 
 **Goal mirror**:
@@ -44,12 +56,12 @@ By default, `start` writes a `goal-prompt.md` artifact for creating a goal mirro
 
 **Work directory**:
 The `.slopflow/work/<work-key>/` directory that stores the local contract, evidence, reviewer verdict, status metadata, and completion note for one issue execution.
-_Avoid_: Run directory, scratch folder, cache, issue reference
+_Avoid_: Run directory, scratch folder, cache, work item reference
 
 Only real artifacts are stored in a work directory. Missing evidence, review, or completion files mean the corresponding gate has not been satisfied.
 
 **Canonical repository**:
-The repository checkout that owns `.slopflow/config.json` and canonical `.slopflow/work/<issue-id>/` artifacts.
+The repository checkout that owns `.slopflow/config.json` and canonical `.slopflow/work/<work-key>/` artifacts.
 _Avoid_: Source repo, main checkout, original repo
 
 Artifact reads and writes resolve through the canonical repository, even when commands are invoked from an isolated attempt workspace.
@@ -69,7 +81,7 @@ Agent attempts are coordination artifacts, not managed agent processes. The init
 
 Agent attempt lifecycle statuses are `created`, `active`, `submitted`, `selected`, `rejected`, and `abandoned`. `complete` remains reserved for local issue work completion, and failed quality gates belong in attempt evidence rather than an attempt lifecycle status.
 
-In the first design, agent attempt ids are issue-local sequential identifiers such as `a1`, `a2`, and `a3`, allocated while holding the issue work lock.
+In the first design, agent attempt ids are work-item-local sequential identifiers such as `a1`, `a2`, and `a3`, allocated while holding the issue work lock.
 Each agent attempt stores `attempt.json`, `goal-prompt.md`, optional evidence, and a required `summary.md` before submission. Later workspace-capable attempts also store `workspace.json`. Attempt submission blocks when `summary.md` is missing so submitted attempts have a human-readable account of the work.
 
 **Selected attempt**:
@@ -96,7 +108,7 @@ After workspace-capable promotion, canonical issue work continues in the selecte
 An isolated version-control workspace associated with one agent attempt so concurrent agents can edit files without sharing a working tree.
 _Avoid_: Scratch clone, temporary checkout, agent sandbox
 
-When attempt workspaces are enabled, each attempt workspace contains a `.slopflow-attempt.json` pointer that identifies the canonical repository, issue id, and attempt id. Slopflow artifacts remain in the canonical repository, while wrapped commands invoked from an attempt workspace run in that workspace and record evidence back to the canonical attempt artifacts.
+When attempt workspaces are enabled, each attempt workspace contains a `.slopflow-attempt.json` pointer that identifies the canonical repository, work key, and attempt id. Slopflow artifacts remain in the canonical repository, while wrapped commands invoked from an attempt workspace run in that workspace and record evidence back to the canonical attempt artifacts.
 
 **Attempt lock**:
 A local artifact lock that protects one agent attempt's Slopflow artifacts from concurrent mutation.
@@ -109,7 +121,7 @@ Planned parallel attempt coordination uses local filesystem artifact locks with 
 **Complete**:
 The Slopflow action that marks local issue work complete only after required evidence and reviewer approval are present.
 _Avoid_: Publish, push, merge, close issue
-Its v0 CLI shape is `slopflow complete <issue-id>`, where the issue id is required and numeric, initialized machine config is required, and the issue work directory plus `status.json` must exist.
+Its CLI shape is `slopflow complete <work-key-or-provider-native-id>`, where the argument resolves to one work directory and initialized machine config plus `status.json` must exist.
 It generates `completion-note.md` when missing after all gates pass, but preserves an existing completion note written by a human or agent.
 In v0, completion requires at least one latest test evidence gate to be passed and no latest test evidence gate to be failed; it does not parse required gates from the markdown issue execution contract.
 If test evidence is missing, v0 completion may proceed only when `evidence/test-exception.md` exists and the reviewer verdict is complete, treating the reviewer approval as acceptance of the exception.
@@ -137,13 +149,13 @@ _Avoid_: Gate result, process state, GitHub issue state
 
 
 **Reviewer verdict**:
-The canonical structured review decision in `.slopflow/work/<issue-id>/review.json` that states whether the issue work is complete or requires changes.
+The canonical structured review decision in `.slopflow/work/<work-key>/review.json` that states whether the issue work is complete or requires changes.
 _Avoid_: Review notes, approval comment
 It uses schema version 1 with `verdict`, `reviewer`, `reviewed_at`, `summary`, and `required_changes`. A complete verdict must have no required changes; a changes-requested verdict must list actionable required changes.
 If `review.json` exists but does not match the schema, the review command treats it as a blocked gate artifact and exits with code 2 after updating the review packet.
 
 **Test evidence**:
-The canonical structured test record in `.slopflow/work/<issue-id>/evidence/tests.json`, with raw command logs stored beside it, that proves which quality gates ran and whether they passed.
+The canonical structured test record in `.slopflow/work/<work-key>/evidence/tests.json`, with raw command logs stored beside it, that proves which quality gates ran and whether they passed.
 _Avoid_: Test claim, informal summary
 
 It keeps an append-only attempt history and a latest-result index per gate. The latest index points to the current attempt id and current status for each gate, while the attempts list preserves full review history.
@@ -151,7 +163,7 @@ It keeps an append-only attempt history and a latest-result index per gate. The 
 Each test evidence attempt uses a timestamp-based attempt id and log filename, such as `unit-2026-06-23T01-27-00-000Z` and `evidence/logs/unit-2026-06-23T01-27-00-000Z.txt`.
 
 **Test exception**:
-A written explanation in `.slopflow/work/<issue-id>/evidence/test-exception.md` for why required tests could not run, which still requires reviewer acceptance before completion.
+A written explanation in `.slopflow/work/<work-key>/evidence/test-exception.md` for why required tests could not run, which still requires reviewer acceptance before completion.
 _Avoid_: Skipped tests, ignored failure
 
 **Quality gate**:
@@ -161,7 +173,7 @@ _Avoid_: Nice-to-have check, optional validation
 **Test command**:
 The Slopflow action that runs a named command-based quality gate and records its structured result plus raw log as test evidence. It can capture unit tests, lint, typecheck, build, or any other command-based verification declared by the issue execution contract.
 _Avoid_: Test runner, test framework
-Its v0 CLI shape is `slopflow test <issue-id> --name <gate> -- <command...>`, where the issue id is numeric, `--name` is required, gate names use lowercase letters/numbers/underscore/hyphen, and `--` is required before the wrapped command.
+Its CLI shape is `slopflow test <work-key-or-provider-native-id> --name <gate> -- <command...>`, where the work selector must resolve to one work directory, `--name` is required, gate names use lowercase letters/numbers/underscore/hyphen, and `--` is required before the wrapped command.
 By default, it returns the wrapped command's exit code even when failure evidence is recorded successfully.
 In v0, wrapped commands run from the repository root for reproducibility; package-specific commands must encode their own working-directory behavior.
 Raw test logs include a metadata header plus separate stdout and stderr sections so each log is useful as standalone review evidence.
@@ -171,7 +183,7 @@ When attempt-scoped test evidence is implemented, it does not by itself satisfy 
 **Review command**:
 The Slopflow action that prepares a review packet and reports whether a reviewer verdict exists and approves completion.
 _Avoid_: Reviewer agent, automatic approval
-Its v0 CLI shape is `slopflow review <issue-id>`, where the issue id is required and numeric, initialized machine config is required, and the issue work directory plus `status.json` must exist.
+Its CLI shape is `slopflow review <work-key-or-provider-native-id>`, where the work selector must resolve to one work directory, initialized machine config is required, and the work directory plus `status.json` must exist.
 It never creates `review.json`; reviewer verdicts are written by a separate human or agent reviewer so Slopflow does not self-approve work.
 Its review packet is a hybrid artifact: it inlines the contract, test evidence summary, configured VCS status, changed files, reviewer instructions, and a bounded diff excerpt, while referencing full logs and commands for deeper inspection. The v0 inline diff limit is 50,000 characters.
 It does not block when test evidence is missing; instead it marks missing evidence in the packet and output so the reviewer can request changes. Completion remains the strict evidence gate.

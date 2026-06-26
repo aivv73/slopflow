@@ -1,8 +1,8 @@
 import { relative } from "node:path";
 
-import { buildTrackedItemContext, formatCommentsMarkdown, issueText } from "./issue-model.js";
+import { buildWorkItemContext, formatCommentsMarkdown, workItemText } from "./issue-model.js";
 import { escapeMarkdown, indentBlock } from "./quality-artifacts.js";
-import type { IssueReference, TrackedItem } from "./types.js";
+import type { WorkItemReference, WorkItem } from "./types.js";
 
 export function buildStartArtifacts({
   item,
@@ -10,7 +10,7 @@ export function buildStartArtifacts({
   workDir,
   root,
 }: {
-  item: TrackedItem;
+  item: WorkItem;
   workKey: string;
   workDir: string;
   root: string;
@@ -23,6 +23,7 @@ export function buildStartArtifacts({
     work_key: workKey,
     work_directory: relative(root, workDir),
     artifacts: {
+      work_item: "work-item.json",
       tracked_item: "tracked-item.json",
       issue: "issue.md",
       contract: "contract.md",
@@ -32,7 +33,8 @@ export function buildStartArtifacts({
     created_by: "slopflow start",
   };
   return {
-    "tracked-item.json": `${JSON.stringify(buildTrackedItemSnapshot(item), null, 2)}\n`,
+    "work-item.json": `${JSON.stringify(buildWorkItemSnapshot(item), null, 2)}\n`,
+    "tracked-item.json": `${JSON.stringify(buildWorkItemSnapshot(item), null, 2)}\n`,
     "issue.md": buildIssueMarkdown(item),
     "contract.md": contract,
     "status.json": `${JSON.stringify(status, null, 2)}\n`,
@@ -42,7 +44,7 @@ export function buildStartArtifacts({
 }
 
 
-export function buildTrackedItemSnapshot(item: TrackedItem): Record<string, unknown> {
+export function buildWorkItemSnapshot(item: WorkItem): Record<string, unknown> {
   return {
     schema_version: 1,
     fetched_at: new Date().toISOString(),
@@ -57,9 +59,9 @@ export function buildTrackedItemSnapshot(item: TrackedItem): Record<string, unkn
 }
 
 
-export function buildIssueMarkdown(item: TrackedItem): string {
+export function buildIssueMarkdown(item: WorkItem): string {
   return `# ${escapeMarkdown(item.title)}\n\n` +
-    `Issue: ${issueText(item.ref)}\n\n` +
+    `Issue: ${workItemText(item.ref)}\n\n` +
     `Kind: ${item.ref.kind}\n\n` +
     `State: ${item.state}\n\n` +
     `URL: ${item.url}\n\n` +
@@ -68,13 +70,13 @@ export function buildIssueMarkdown(item: TrackedItem): string {
 }
 
 
-export function buildContract(item: TrackedItem): string {
-  const providerContext = buildTrackedItemContext(item);
+export function buildContract(item: WorkItem): string {
+  const providerContext = buildWorkItemContext(item);
   return `# Issue Execution Contract\n\n` +
-    `Issue: ${issueText(item.ref)}\n\n` +
+    `Issue: ${workItemText(item.ref)}\n\n` +
     `## Issue Summary\n\n${item.title}\n\n` +
-    `## Acceptance Criteria\n\nExtract from the source issue before implementing. Source tracked item context:\n\n${indentBlock(providerContext)}\n\n` +
-    `## Constraints\n\n- Stay within the scope of ${issueText(item.ref)}.\n- Preserve Slopflow's CLI-runbook model; do not introduce autonomous orchestration unless explicitly approved.\n- Do not add dependencies without justification and review.\n\n` +
+    `## Acceptance Criteria\n\nExtract from the source work item before implementing. Source work item context:\n\n${indentBlock(providerContext)}\n\n` +
+    `## Constraints\n\n- Stay within the scope of ${workItemText(item.ref)}.\n- Preserve Slopflow's CLI-runbook model; do not introduce autonomous orchestration unless explicitly approved.\n- Do not add dependencies without justification and review.\n\n` +
     `## Out of Scope\n\n- Work not requested by the source issue.\n- Publishing, pushing, merging, creating PRs, or closing issues unless separately requested.\n\n` +
     `## Required Quality Gates\n\n- Test evidence is required unless an explicit test exception is written and accepted by review.\n- Reviewer verdict is required before completion.\n- Browser or design evidence is required only if this contract is updated to require it.\n\n` +
     `## Blocked-Stop Conditions\n\n- Acceptance criteria cannot be extracted from the issue.\n- Required external tools or credentials are unavailable.\n- The implementation would expand beyond the source issue.\n- Quality gates cannot run and no reviewed test exception exists.\n\n` +
@@ -87,9 +89,9 @@ export function buildGoalPrompt(contract: string): string {
 }
 
 
-export function buildNextSteps(issueReference: IssueReference): string {
+export function buildNextSteps(issueReference: WorkItemReference): string {
   return `# Next Steps\n\n` +
-    `1. Read \`contract.md\` and confirm scope for ${issueText(issueReference)}.\n` +
+    `1. Read \`contract.md\` and confirm scope for ${workItemText(issueReference)}.\n` +
     `2. Create a Pi goal mirror from \`goal-prompt.md\` if working inside Pi.\n` +
     `3. Plan the smallest implementation that satisfies the contract.\n` +
     `4. Implement only the contract scope.\n` +

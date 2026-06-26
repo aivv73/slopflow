@@ -16,7 +16,7 @@ Coding agents are useful, but a model saying “done” is not a completion cont
 
 - initialize a repository workflow contract
 - install harness-specific skills, extensions, and agent roles
-- start work from a configured issue tracker provider's issue
+- start work from a configured issue tracker provider's work item
 - record test evidence instead of merely claiming tests passed
 - prepare review packets
 - block local completion until evidence and review gates pass
@@ -29,7 +29,7 @@ Slopflow is for people who use coding agents across repositories and want the wo
 
 It is especially useful if you:
 
-- work from issue tracker items such as GitHub or GitLab issues
+- work from issue tracker provider work items such as GitHub issues/PRs or GitLab issues/MRs
 - want agents to record evidence instead of merely reporting success
 - use Pi, Claude Code, or Agent Skills-compatible tooling
 - prefer project-local configuration over global harness mutation
@@ -105,7 +105,7 @@ slopflow test 42 --name unit -- npm test
 slopflow review 42
 ```
 
-The current issue workflow supports Git and Jujutsu (`jj`) repositories. Jujutsu is recommended for the smoothest local change/workspace workflow, but it is not required; `slopflow doctor` reports missing prerequisites and setup gaps.
+The current work item workflow supports Git and Jujutsu (`jj`) repositories. Jujutsu is recommended for the smoothest local change/workspace workflow, but it is not required; `slopflow doctor` reports missing prerequisites and setup gaps.
 
 Use `install` without `--yes` when you want to review the workflow-pack plan before writing files:
 
@@ -181,10 +181,10 @@ The local Slopflow Pi extension registers:
 ```text
 /slopflow-status
 /slopflow-doctor
-/slopflow-create-goal <issue-id>
+/slopflow-create-goal <provider-native-id>
 ```
 
-`/slopflow-create-goal <issue-id>` runs `slopflow start`, reads the generated `goal-prompt.md`, and pre-fills `pi-codex-goal`’s `/create-goal` prompt for user review. Codex-specific conversion helpers are runtime adapters and are not installed by default.
+`/slopflow-create-goal <provider-native-id>` runs `slopflow start`, reads the generated `goal-prompt.md`, and pre-fills `pi-codex-goal`’s `/create-goal` prompt for user review. Codex-specific conversion helpers are runtime adapters and are not installed by default.
 
 The installed Pi subagent roles are:
 
@@ -258,15 +258,16 @@ Deprecated setup commands:
 slopflow status
 ```
 
-### Start issue work
+### Start work item work
 
 ```bash
 slopflow start 42
 ```
 
-`start` reads one issue from the configured issue tracker provider and creates canonical bootstrap artifacts:
+`start` reads one work item from the configured issue tracker provider and creates canonical bootstrap artifacts:
 
 ```text
+.slopflow/work/<work-key>/work-item.json
 .slopflow/work/<work-key>/tracked-item.json
 .slopflow/work/<work-key>/issue.md
 .slopflow/work/<work-key>/contract.md
@@ -275,7 +276,7 @@ slopflow start 42
 .slopflow/work/<work-key>/next-steps.md
 ```
 
-`tracked-item.json` is the one-shot provider intake snapshot. After start, `contract.md` is the local source of truth; Slopflow does not silently synchronize provider edits into existing work.
+`work-item.json` is the one-shot provider intake snapshot. `tracked-item.json` is still written as a legacy compatibility filename. After start, `contract.md` is the local source of truth; Slopflow does not silently synchronize provider edits into existing work.
 
 It does not create placeholder evidence, review, or completion files.
 
@@ -299,7 +300,7 @@ slopflow test 42 --name typecheck -- npm run build
 `test` writes structured evidence and raw logs under:
 
 ```text
-.slopflow/work/42/evidence/
+.slopflow/work/<work-key>/evidence/
 ```
 
 Then it returns the wrapped command’s exit code.
@@ -331,7 +332,7 @@ slopflow review 42
 `review` writes:
 
 ```text
-.slopflow/work/42/review-packet.md
+.slopflow/work/<work-key>/review-packet.md
 ```
 
 It does not self-approve and does not create `review.json`. A separate human or agent reviewer must write the verdict.
@@ -358,7 +359,7 @@ status:
   vcs: jj
   artifact-root: .slopflow/work
   current-vcs-state: zsuskvpx 5a9ba73d main* | Add feature
-  next-step: slopflow start <issue-id>
+  next-step: slopflow start <provider-native-id>
 ```
 
 Example structured error output:
@@ -454,22 +455,22 @@ slopflow status [--json]
 slopflow doctor [--json]
 slopflow install --harness pi|omp|claude-code|generic [--yes] [--force]
 slopflow skill lint
-slopflow start <issue-id> [--provider <provider> --repository <owner/name> --base-url <url> --kind issue --id <id>]
-slopflow attempt create <issue-id> [--count <n>]
-slopflow attempt list <issue-id>
-slopflow attempt status <issue-id> [attempt-id]
-slopflow attempt submit <issue-id> <attempt-id>
-slopflow attempt abandon <issue-id> <attempt-id> --reason <text>
-slopflow attempt compare <issue-id>
-slopflow attempt select <issue-id> <attempt-id> --reason <text>
-slopflow attempt promote <issue-id>
-slopflow pause <issue-id> --reason <text>
-slopflow resume <issue-id>
-slopflow cancel <issue-id> --reason <text>
-slopflow test <issue-id> --name <gate> -- <command...>
-slopflow test <issue-id> --attempt <attempt-id> --name <gate> -- <command...>
-slopflow review <issue-id>
-slopflow complete <issue-id>
+slopflow start <provider-native-id> [--provider <provider> --repository <owner/name> --base-url <url> --kind issue --id <id>]
+slopflow attempt create <work-key-or-provider-native-id> [--count <n>]
+slopflow attempt list <work-key-or-provider-native-id>
+slopflow attempt status <work-key-or-provider-native-id> [attempt-id]
+slopflow attempt submit <work-key-or-provider-native-id> <attempt-id>
+slopflow attempt abandon <work-key-or-provider-native-id> <attempt-id> --reason <text>
+slopflow attempt compare <work-key-or-provider-native-id>
+slopflow attempt select <work-key-or-provider-native-id> <attempt-id> --reason <text>
+slopflow attempt promote <work-key-or-provider-native-id>
+slopflow pause <work-key-or-provider-native-id> --reason <text>
+slopflow resume <work-key-or-provider-native-id>
+slopflow cancel <work-key-or-provider-native-id> --reason <text>
+slopflow test <work-key-or-provider-native-id> --name <gate> -- <command...>
+slopflow test <work-key-or-provider-native-id> --attempt <attempt-id> --name <gate> -- <command...>
+slopflow review <work-key-or-provider-native-id>
+slopflow complete <work-key-or-provider-native-id>
 ```
 
 ## Development

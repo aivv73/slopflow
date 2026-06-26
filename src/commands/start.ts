@@ -2,10 +2,10 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { findRepoRoot, issueWorkLockPath, printBlock, readJson, readMachineConfig, readdirSyncSafe, relativeToCwd, withArtifactLock } from "../infra.js";
-import { readTrackedItem } from "../issue-intake.js";
-import { buildWorkKey, issueText, normalizeIssueReference, parseStartReference, stableStringify } from "../issue-model.js";
+import { readWorkItem } from "../issue-intake.js";
+import { buildWorkKey, workItemText, normalizeWorkItemReference, parseStartWorkItemReference, stableStringify } from "../issue-model.js";
 import { buildStartArtifacts } from "../start-artifacts.js";
-import type { IssueReference } from "../types.js";
+import type { WorkItemReference } from "../types.js";
 import { SlopflowError } from "../types.js";
 
 export function startCommand(args: string[]): number {
@@ -19,16 +19,16 @@ export function startCommand(args: string[]): number {
     );
   }
   const config = readMachineConfig(root);
-  const reference = parseStartReference(args, config);
+  const reference = parseStartWorkItemReference(args, config);
   if (reference.kind !== "issue") {
     throw new SlopflowError(
-      `Unsupported tracked item kind: ${reference.kind}.`,
+      `Unsupported work item kind: ${reference.kind}.`,
       "Issue intake currently supports kind=issue.",
       2,
     );
   }
 
-  const item = readTrackedItem(reference);
+  const item = readWorkItem(reference);
   const workKey = buildWorkKey(item.ref);
   const workDir = join(root, config.artifact_root, workKey);
   const statusPath = join(workDir, "status.json");
@@ -38,10 +38,10 @@ export function startCommand(args: string[]): number {
   return withArtifactLock({ scope: "work", lockPath: issueWorkLockPath(workDir), force, command: "slopflow start" }, () => {
     let action = "created";
     if (existsSync(statusPath)) {
-      const existing = readJson(statusPath) as { issue?: IssueReference };
-      if (stableStringify(normalizeIssueReference(existing.issue)) !== stableStringify(item.ref)) {
+      const existing = readJson(statusPath) as { issue?: WorkItemReference };
+      if (stableStringify(normalizeWorkItemReference(existing.issue)) !== stableStringify(item.ref)) {
         throw new SlopflowError(
-          `Work directory already exists for a different issue reference: ${relativeToCwd(workDir)}`,
+          `Work directory already exists for a different work item reference: ${relativeToCwd(workDir)}`,
           "Slopflow will not overwrite issue work automatically.",
           2,
         );
@@ -62,7 +62,7 @@ export function startCommand(args: string[]): number {
 
     printBlock("start", {
       status: action,
-      issue: issueText(item.ref),
+      issue: workItemText(item.ref),
       kind: item.ref.kind,
       "work-key": workKey,
       "work-directory": relativeToCwd(workDir),

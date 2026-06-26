@@ -160,7 +160,7 @@ export function groupStatus(checks: DoctorCheck[], prefix: string): "passed" | "
 
 
 export function nextStepForDoctor(status: string, checks: DoctorCheck[]): string {
-  if (status === "passed") return "slopflow start <issue-id>";
+  if (status === "passed") return "slopflow start <provider-native-id>";
   const firstFailed = checks.find((check) => check.status === "failed");
   if (firstFailed?.name === "core.config") return "slopflow init";
   if (firstFailed?.name === "core.work-root") return "slopflow init";
@@ -230,7 +230,7 @@ export async function homeCommand(): Promise<number> {
     "cancelled-work-count": workCounts.cancelled,
     "complete-work-count": workCounts.complete,
     "attempt-count": attemptCount,
-    "next-step": "slopflow start <issue-id>",
+    "next-step": "slopflow start <provider-native-id>",
   });
   return 0;
 }
@@ -307,7 +307,7 @@ export async function statusCommand({ json = false }: { json?: boolean } = {}): 
     "cancelled-work-count": workCounts.cancelled,
     "complete-work-count": workCounts.complete,
     "attempt-count": attemptCount,
-    "next-step": "slopflow start <issue-id>",
+    "next-step": "slopflow start <provider-native-id>",
   };
   if (json) printJson({ status });
   else printBlock("status", status);

@@ -30,14 +30,14 @@ export type MachineConfig = {
 export type SupportedVcs = "jj" | "git";
 
 
-export type IssueKind = "issue" | "pull_request" | "merge_request";
+export type WorkItemKind = "issue" | "pull_request" | "merge_request";
 
 
-export type IssueReference = {
+export type WorkItemReference = {
   provider: string;
   base_url: string;
   repository: string;
-  kind: IssueKind;
+  kind: WorkItemKind;
   id: string;
   url?: string;
   repo?: string;
@@ -45,18 +45,18 @@ export type IssueReference = {
 };
 
 
-export type TrackedItem = {
-  ref: IssueReference;
+export type WorkItem = {
+  ref: WorkItemReference;
   title: string;
   description: string;
   url: string;
   state: string;
-  comments: TrackedItemComment[];
+  comments: WorkItemComment[];
   labels: string[];
 };
 
 
-export type TrackedItemComment = {
+export type WorkItemComment = {
   author: string;
   created_at: string;
   body: string;
@@ -144,7 +144,7 @@ export type ArtifactLockScope = "work" | "attempt" | "selection";
 export type WorkStatus = {
   schema_version?: number;
   status?: WorkLifecycleStatus | string;
-  issue: IssueReference;
+  issue: WorkItemReference;
   [key: string]: unknown;
 };
 

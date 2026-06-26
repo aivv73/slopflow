@@ -181,10 +181,10 @@ function writeSkillFixtures(repo, { failing = false } = {}) {
   mkdirSync(join(repo, "skills", "setup-slopflow-skills"), { recursive: true });
   writeFileSync(join(repo, "skills", "slopflow", "SKILL.md"), failing
     ? "# Slopflow\n\n!`slopflow status`\n"
-    : "# Slopflow\n\nThe Slopflow CLI output and `.slopflow/work/<issue-id>/` artifacts are canonical.\n\nDo not manually fabricate test evidence, review verdicts, completion notes, or status metadata.\n\nDo not push, merge, publish, create a pull request, or close an issue unless explicitly requested.\n", "utf8");
+    : "# Slopflow\n\nThe Slopflow CLI output and `.slopflow/work/<work-key>/` artifacts are canonical.\n\nDo not manually fabricate test evidence, review verdicts, completion notes, or status metadata.\n\nDo not push, merge, publish, create a pull request, or close an issue unless explicitly requested.\n", "utf8");
   writeFileSync(join(repo, "skills", "slopflow-live", "SKILL.md"), failing
     ? "# Slopflow Live\n\n- status: !`slopflow start 1`\n"
-    : "# Slopflow Live\n\n- status: !`slopflow status 2>&1 || true`\n\nThe Slopflow CLI output and `.slopflow/work/<issue-id>/` artifacts are canonical.\n\nDo not manually fabricate test evidence, review verdicts, completion notes, or status metadata.\n\nDo not push, merge, publish, create a pull request, or close an issue unless explicitly requested.\n", "utf8");
+    : "# Slopflow Live\n\n- status: !`slopflow status 2>&1 || true`\n\nThe Slopflow CLI output and `.slopflow/work/<work-key>/` artifacts are canonical.\n\nDo not manually fabricate test evidence, review verdicts, completion notes, or status metadata.\n\nDo not push, merge, publish, create a pull request, or close an issue unless explicitly requested.\n", "utf8");
   writeFileSync(join(repo, "skills", "setup-slopflow-skills", "domain.md"), failing
     ? "# Domain\n"
     : "---\ntype: Agent Configuration\n---\n# Domain\n", "utf8");
@@ -435,10 +435,10 @@ test("install generic --yes writes portable agent skills", requiresJj, withRepo(
   assert.equal(existsSync(join(repo, ".agents", "skills", "slopflow", "SKILL.md")), true);
   assert.equal(existsSync(join(repo, ".agents", "skills", "setup-slopflow-skills", "SKILL.md")), true);
   const skill = readFileSync(join(repo, ".agents", "skills", "slopflow", "SKILL.md"), "utf8");
-  assert.match(skill, /slopflow test <issue-id> --attempt <attempt-id> --name <gate> -- <command\.\.\.>/);
-  assert.match(skill, /slopflow attempt compare <issue-id>/);
-  assert.match(skill, /slopflow attempt select <issue-id> <attempt-id> --reason/);
-  assert.match(skill, /slopflow attempt promote <issue-id>/);
+  assert.match(skill, /slopflow test <work-key-or-provider-native-id> --attempt <attempt-id> --name <gate> -- <command\.\.\.>/);
+  assert.match(skill, /slopflow attempt compare <work-key-or-provider-native-id>/);
+  assert.match(skill, /slopflow attempt select <work-key-or-provider-native-id> <attempt-id> --reason/);
+  assert.match(skill, /slopflow attempt promote <work-key-or-provider-native-id>/);
   assert.match(skill, /canonical repository/);
   assert.match(skill, /execution workspace/);
   assert.match(skill, /artifact-only/);
@@ -514,7 +514,7 @@ test("status reports config, jj change, active work count, and next step", requi
   assert.match(result.stdout, /artifact-root: \.slopflow\/work/);
   assert.match(result.stdout, /current-jj-change:/);
   assert.match(result.stdout, /active-work-count: 1/);
-  assert.match(result.stdout, /next-step: slopflow start <issue-id>/);
+  assert.match(result.stdout, /next-step: slopflow start <provider-native-id>/);
 }));
 
 test("status --json returns valid JSON with status fields", requiresJj, withRepo((repo, env) => {
@@ -530,7 +530,7 @@ test("status --json returns valid JSON with status fields", requiresJj, withRepo
   assert.equal(payload.status.issue_tracker, "github");
   assert.equal(payload.status.vcs, "jj");
   assert.equal(payload.status["active-work-count"], 1);
-  assert.equal(payload.status["next-step"], "slopflow start <issue-id>");
+  assert.equal(payload.status["next-step"], "slopflow start <provider-native-id>");
 }));
 
 test("status blocks before init", requiresJj, withRepo((repo, env) => {
@@ -564,7 +564,7 @@ test("doctor reports initialized repository readiness", requiresJj, withRepo((re
   assert.match(result.stdout, /recommended: passed/);
   assert.match(result.stdout, /failed-count: 0/);
   assert.match(result.stdout, /warning-count: 0/);
-  assert.match(result.stdout, /next-step: slopflow start <issue-id>/);
+  assert.match(result.stdout, /next-step: slopflow start <provider-native-id>/);
   assert.match(result.stdout, /checks\[/);
   assert.match(result.stdout, /core.node: passed node v.* satisfies >=24/);
   assert.match(result.stdout, /core.config: passed/);
@@ -695,7 +695,7 @@ test("no-args home view reports initialized repository state", requiresJj, withR
   assert.match(result.stdout, /artifact-root: \.slopflow\/work/);
   assert.match(result.stdout, /current-jj-change:/);
   assert.match(result.stdout, /active-work-count: 1/);
-  assert.match(result.stdout, /next-step: slopflow start <issue-id>/);
+  assert.match(result.stdout, /next-step: slopflow start <provider-native-id>/);
 }));
 
 test("help flag prints concise command reference", () => {
@@ -782,7 +782,7 @@ test("start is idempotent for matching work directory", requiresJj, withRepo((re
   assert.match(second.stdout, /status: unchanged/);
 }));
 
-test("start accepts explicit provider issue reference flags", requiresJj, withRepo((repo, env) => {
+test("start accepts explicit provider work item reference flags", requiresJj, withRepo((repo, env) => {
   assert.equal(slopflow(repo, env, "init").status, 0);
 
   const result = slopflow(repo, env, "start", "--provider", "github", "--repository", "aivv73/slopflow", "--base-url", "HTTPS://github.com/", "--kind", "issue", "--id", "2");
@@ -794,13 +794,13 @@ test("start accepts explicit provider issue reference flags", requiresJj, withRe
   assert.equal(status.issue.id, "2");
 }));
 
-test("start blocks unsupported explicit tracked item kinds", requiresJj, withRepo((repo, env) => {
+test("start blocks unsupported explicit work item kinds", requiresJj, withRepo((repo, env) => {
   assert.equal(slopflow(repo, env, "init").status, 0);
 
   const result = slopflow(repo, env, "start", "--provider", "github", "--repository", "aivv73/slopflow", "--kind", "pull_request", "--id", "2");
 
   assert.equal(result.status, 2);
-  assert.match(result.stdout, /Unsupported tracked item kind: pull_request/);
+  assert.match(result.stdout, /Unsupported work item kind: pull_request/);
   assert.match(result.stdout, /status: blocked/);
 }));
 
@@ -846,7 +846,14 @@ process.exit(1);
   assert.equal(status.issue.provider, "gitlab");
   assert.equal(status.issue.base_url, "https://gitlab.example.com");
   assert.equal(status.issue.id, "7");
-  const snapshot = JSON.parse(readFileSync(join(workDir, "tracked-item.json"), "utf8"));
+  const snapshot = JSON.parse(readFileSync(join(workDir, "work-item.json"), "utf8"));
+  const legacySnapshot = JSON.parse(readFileSync(join(workDir, "tracked-item.json"), "utf8"));
+  assert.deepEqual(legacySnapshot, snapshot);
+  assert.equal(status.artifacts.work_item, "work-item.json");
+  assert.equal(status.artifacts.tracked_item, "tracked-item.json");
+  assert.equal(snapshot.ref.provider, "gitlab");
+  assert.equal(snapshot.ref.kind, "issue");
+  assert.equal(snapshot.ref.id, "7");
   assert.equal(snapshot.comments[0].body, "clarifying comment");
   assert.deepEqual(snapshot.labels, ["backend"]);
 }));
@@ -1087,7 +1094,7 @@ test("start refuses existing work directory without status metadata", requiresJj
   assert.match(result.stdout, /already exists without status metadata/);
 }));
 
-test("start refuses existing work directory for a different issue reference", requiresJj, withRepo((repo, env) => {
+test("start refuses existing work directory for a different work item reference", requiresJj, withRepo((repo, env) => {
   assert.equal(slopflow(repo, env, "init").status, 0);
   const workDir = join(repo, ".slopflow", "work", githubIssue2WorkKey());
   mkdirSync(workDir, { recursive: true });
@@ -1105,7 +1112,7 @@ test("start refuses existing work directory for a different issue reference", re
 
   assert.equal(result.status, 2);
   assert.match(result.stdout, /status: blocked/);
-  assert.match(result.stdout, /different issue reference/);
+  assert.match(result.stdout, /different work item reference/);
 }));
 
 test("start reports gh authentication failures with command diagnostics", requiresJj, withRepo((repo, env) => {
@@ -1567,7 +1574,7 @@ test("review creates packet and reports pending when review verdict is missing",
 
   const packet = readFileSync(join(workDirFor(repo, "2"), "review-packet.md"), "utf8");
   assert.match(packet, /# Review Packet/);
-  assert.match(packet, /Issue: github:aivv73\/slopflow issue 2/);
+  assert.match(packet, /Work item: github:aivv73\/slopflow issue 2/);
   assert.match(packet, /## Contract/);
   assert.match(packet, /## Test Evidence Summary/);
   assert.match(packet, /Status: missing/);
@@ -1716,7 +1723,7 @@ test("complete marks work complete and generates completion note", requiresJj, w
 
   const note = readFileSync(join(workDirFor(repo, "2"), "completion-note.md"), "utf8");
   assert.match(note, /# Completion Note/);
-  assert.match(note, /Issue: github:aivv73\/slopflow issue 2/);
+  assert.match(note, /Work item: github:aivv73\/slopflow issue 2/);
   assert.match(note, /Tests: passed/);
   assert.match(note, /Verdict: complete/);
 }));

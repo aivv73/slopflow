@@ -332,13 +332,13 @@ export function ompCreateGoalCommandTemplate(): string {
 
 ## Arguments
 
-- \`$ARGUMENTS\` — numeric issue id.
+- \`$ARGUMENTS\` — provider-native work item id.
 
 ## Steps
 
-1. Validate that \`$ARGUMENTS\` is a numeric issue id.
-2. Run \`slopflow start <issue-id>\`.
-3. Read the generated \`.slopflow/work/<issue-id>/goal-prompt.md\`.
+1. Validate that \`$ARGUMENTS\` is a provider-native work item id.
+2. Run \`slopflow start <provider-native-id>\`.
+3. Read the generated \`.slopflow/work/<work-key>/goal-prompt.md\`.
 4. Create an OMP native goal mirror from that prompt with \`/goal set <goal prompt content>\`.
 5. Continue through the \`slopflow-live\` skill workflow.
 
@@ -388,7 +388,7 @@ Follow the parent project instructions and the Slopflow lifecycle strictly.
 
 Required behavior:
 
-- Use \`slopflow start <issue-id>\` before issue execution when no work directory exists.
+- Use \`slopflow start <provider-native-id>\` before work item execution when no work directory exists.
 - Use \`slopflow test <issue-id> --name <gate> -- <command...>\` to record test evidence.
 - Do not manually fabricate test evidence, review verdicts, completion notes, or status metadata.
 - Do not push, merge, publish, create a pull request, or close an issue unless explicitly requested.

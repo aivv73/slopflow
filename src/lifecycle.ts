@@ -2,7 +2,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { assertSafeWorkKey, findRepoRoot, issueWorkLockPath, parseReasonArg, printBlock, readCurrentJjChange, readCurrentVcsState, readMachineConfig, readWorkStatus, relativeToCwd, resolveWorkDir, withArtifactLock, writeJson } from "./infra.js";
-import { issueText } from "./issue-model.js";
+import { workItemText } from "./issue-model.js";
 import { nextStepForWork, summarizeLatestTests, summarizeReviewVerdict } from "./quality-artifacts.js";
 import type { WorkStatus } from "./types.js";
 import { SlopflowError } from "./types.js";
@@ -13,7 +13,7 @@ export function lifecycleCommand(action: "pause" | "resume" | "cancel", args: st
   const reason = action === "resume" ? undefined : parseReasonArg(args.slice(1), action);
   const { root, workDir, workStatus, statusPath } = readLifecycleContext(issueId, action);
   const issue = workStatus.issue;
-  const issueTextValue = issueText(issue);
+  const workItemTextValue = workItemText(issue);
   const now = new Date().toISOString();
 
   return withArtifactLock({ scope: "work", lockPath: issueWorkLockPath(workDir), force, command: `slopflow ${action}` }, () => {
@@ -26,11 +26,11 @@ export function lifecycleCommand(action: "pause" | "resume" | "cancel", args: st
       throw new SlopflowError("Complete issue work cannot be paused.", `Inspect ${relativeToCwd(join(workDir, "completion-note.md"))}.`, 2);
     }
     const pauseNotePath = join(workDir, "pause-note.md");
-    writeFileSync(pauseNotePath, buildLifecycleNote("Pause", issueTextValue, reason!, now), "utf8");
+    writeFileSync(pauseNotePath, buildLifecycleNote("Pause", workItemTextValue, reason!, now), "utf8");
     writeJson(statusPath, { ...workStatus, status: "paused", paused_at: now, pause_reason: reason });
     printBlock("pause", {
       status: "paused",
-      issue: issueTextValue,
+      issue: workItemTextValue,
       "pause-note": relativeToCwd(pauseNotePath),
       "next-step": `slopflow resume ${issueId}`,
     });
@@ -42,11 +42,11 @@ export function lifecycleCommand(action: "pause" | "resume" | "cancel", args: st
       throw new SlopflowError("Complete issue work cannot be cancelled.", `Inspect ${relativeToCwd(join(workDir, "completion-note.md"))}.`, 2);
     }
     const cancelNotePath = join(workDir, "cancel-note.md");
-    writeFileSync(cancelNotePath, buildLifecycleNote("Cancel", issueTextValue, reason!, now), "utf8");
+    writeFileSync(cancelNotePath, buildLifecycleNote("Cancel", workItemTextValue, reason!, now), "utf8");
     writeJson(statusPath, { ...workStatus, status: "cancelled", cancelled_at: now, cancel_reason: reason });
     printBlock("cancel", {
       status: "cancelled",
-      issue: issueTextValue,
+      issue: workItemTextValue,
       "cancel-note": relativeToCwd(cancelNotePath),
       artifacts: "preserved",
       "next-step": "inspect artifacts or manually abandon related VCS work if desired",
@@ -67,7 +67,7 @@ export function lifecycleCommand(action: "pause" | "resume" | "cancel", args: st
   const config = readMachineConfig(root);
   printBlock("resume", {
     status: wasPaused ? "active" : String(workStatus.status ?? "active"),
-    issue: issueTextValue,
+    issue: workItemTextValue,
     contract: relativeToCwd(join(workDir, "contract.md")),
     tests: testsSummary,
     review: reviewStatus,
@@ -100,7 +100,7 @@ export function readLifecycleContext(issueId: string | undefined, command: "paus
 export function buildLifecycleNote(kind: "Pause" | "Cancel", issue: string, reason: string, timestamp: string): string {
   const verb = kind === "Pause" ? "Paused" : "Cancelled";
   return `# ${kind} Note\n\n` +
-    `Issue: ${issue}\n\n` +
+    `Work item: ${issue}\n\n` +
     `${verb} at: ${timestamp}\n\n` +
     `## Reason\n\n${reason}\n`;
 }

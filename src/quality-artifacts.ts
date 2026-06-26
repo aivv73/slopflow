@@ -4,8 +4,8 @@ import { join, resolve } from "node:path";
 
 import { parseAttemptIdArg, readAttemptOrThrow, readAttemptPointer } from "./attempts.js";
 import { assertSafeWorkKey, attemptLockPath, boundText, buildTestEvidenceSummary, changedFilesFromDiff, findRepoRoot, isVcsStatusReadable, issueWorkLockPath, printBlock, readJson, readMachineConfig, readTestEvidence, readVcsDiff, readVcsStatus, readWorkStatus, relativeToCwd, resolveWorkDir, vcsDisplayName, withArtifactLock, writeJson } from "./infra.js";
-import { issueText } from "./issue-model.js";
-import type { ArtifactLockScope, IssueReference, ReviewVerdict, TestAttempt, TestEvidence, WorkStatus } from "./types.js";
+import { workItemText } from "./issue-model.js";
+import type { ArtifactLockScope, WorkItemReference, ReviewVerdict, TestAttempt, TestEvidence, WorkStatus } from "./types.js";
 import { REVIEW_DIFF_LIMIT } from "./types.js";
 import { SlopflowError } from "./types.js";
 
@@ -28,46 +28,46 @@ export function completeCommand(args: string[]): number {
   const workStatusPath = join(workDir, "status.json");
   const workStatus = readWorkStatus(workDir, issueId, "complete");
   const issue = workStatus.issue;
-  const issueTextValue = issueText(issue);
+  const workItemTextValue = workItemText(issue);
   const workspaceBlock = promotedWorkspaceBlock(workStatus, executionRoot, issueId, "complete");
-  if (workspaceBlock) return completeBlocked(issueTextValue, workspaceBlock.reason, workspaceBlock.nextStep, workDir);
+  if (workspaceBlock) return completeBlocked(workItemTextValue, workspaceBlock.reason, workspaceBlock.nextStep, workDir);
 
   return withArtifactLock({ scope: "work", lockPath: issueWorkLockPath(workDir), force, command: "slopflow complete" }, () => {
 
   if (workStatus.status === "cancelled") {
-    return completeBlocked(issueTextValue, "issue work is cancelled", `inspect ${relativeToCwd(join(workDir, "cancel-note.md"))} or start new work`, workDir);
+    return completeBlocked(workItemTextValue, "issue work is cancelled", `inspect ${relativeToCwd(join(workDir, "cancel-note.md"))} or start new work`, workDir);
   }
 
   const contractPath = join(workDir, "contract.md");
   if (!existsSync(contractPath)) {
-    return completeBlocked(issueTextValue, "missing contract.md", "restore contract.md or rerun slopflow start", workDir);
+    return completeBlocked(workItemTextValue, "missing contract.md", "restore contract.md or rerun slopflow start", workDir);
   }
   if (!isVcsStatusReadable(executionRoot, config.vcs.type)) {
-    return completeBlocked(issueTextValue, `${config.vcs.type} status is not readable`, `fix ${vcsDisplayName(config.vcs.type)} repository state`, workDir);
+    return completeBlocked(workItemTextValue, `${config.vcs.type} status is not readable`, `fix ${vcsDisplayName(config.vcs.type)} repository state`, workDir);
   }
 
   const reviewPath = join(workDir, "review.json");
   if (!existsSync(reviewPath)) {
-    return completeBlocked(issueTextValue, "missing review verdict", `slopflow review ${issueId}`, workDir);
+    return completeBlocked(workItemTextValue, "missing review verdict", `slopflow review ${issueId}`, workDir);
   }
   const reviewValidation = readAndValidateReviewVerdict(reviewPath);
   if (!reviewValidation.ok) {
-    return completeBlocked(issueTextValue, "invalid review verdict", "fix review.json", workDir);
+    return completeBlocked(workItemTextValue, "invalid review verdict", "fix review.json", workDir);
   }
   if (reviewValidation.verdict.verdict !== "complete") {
-    return completeBlocked(issueTextValue, "review verdict is changes-requested", "address required changes", workDir);
+    return completeBlocked(workItemTextValue, "review verdict is changes-requested", "address required changes", workDir);
   }
 
   const evidenceGate = evaluateCompletionEvidence(workDir);
   if (!evidenceGate.ok) {
-    return completeBlocked(issueTextValue, evidenceGate.reason, evidenceGate.nextStep, workDir);
+    return completeBlocked(workItemTextValue, evidenceGate.reason, evidenceGate.nextStep, workDir);
   }
 
   const completionNotePath = join(workDir, "completion-note.md");
   if (!existsSync(completionNotePath)) {
     writeFileSync(
       completionNotePath,
-      buildCompletionNote({ issue: issueTextValue, testsStatus: evidenceGate.testsStatus, review: reviewValidation.verdict, workDir }),
+      buildCompletionNote({ issue: workItemTextValue, testsStatus: evidenceGate.testsStatus, review: reviewValidation.verdict, workDir }),
       "utf8",
     );
   }
@@ -77,7 +77,7 @@ export function completeCommand(args: string[]): number {
 
   printBlock("complete", {
     status: "complete",
-    issue: issueTextValue,
+    issue: workItemTextValue,
     tests: evidenceGate.testsStatus,
     review: "complete",
     "completion-note": relativeToCwd(completionNotePath),
@@ -159,7 +159,7 @@ export function buildCompletionNote({ issue, testsStatus, review, workDir }: { i
   const exceptionPath = join(workDir, "evidence", "test-exception.md");
   const exception = existsSync(exceptionPath) ? readFileSync(exceptionPath, "utf8") : "";
   return `# Completion Note\n\n` +
-    `Issue: ${issue}\n\n` +
+    `Work item: ${issue}\n\n` +
     `## Summary\n\nLocal issue work passed Slopflow completion gates.\n\n` +
     `## Quality Gates\n\n` +
     `Tests: ${testsStatus}\n\n` +
@@ -195,7 +195,7 @@ export function reviewCommand(args: string[]): number {
   if (workspaceBlock) {
     printBlock("review", {
       status: "blocked",
-      issue: issueText(issue),
+      issue: workItemText(issue),
       reason: workspaceBlock.reason,
       "execution-workspace": workspaceBlock.workspace,
       "next-step": workspaceBlock.nextStep,
@@ -214,7 +214,7 @@ export function reviewCommand(args: string[]): number {
   if (!existsSync(reviewPath)) {
     printBlock("review", {
       status: "pending",
-      issue: issueText(issue),
+      issue: workItemText(issue),
       packet: relativeToCwd(packetPath),
       verdict: "missing",
       "test-evidence": testEvidenceStatus,
@@ -227,7 +227,7 @@ export function reviewCommand(args: string[]): number {
   if (!validation.ok) {
     printBlock("review", {
       status: "blocked",
-      issue: issueText(issue),
+      issue: workItemText(issue),
       packet: relativeToCwd(packetPath),
       verdict: "invalid",
       "test-evidence": testEvidenceStatus,
@@ -240,7 +240,7 @@ export function reviewCommand(args: string[]): number {
   const verdict = validation.verdict.verdict;
   printBlock("review", {
     status: verdict === "complete" ? "complete" : "changes-requested",
-    issue: issueText(issue),
+    issue: workItemText(issue),
     packet: relativeToCwd(packetPath),
     verdict,
     "test-evidence": testEvidenceStatus,
@@ -342,7 +342,7 @@ export function testCommand(args: string[]): number {
 
   printBlock("test", {
     status,
-    issue: issueText(workStatus.issue),
+    issue: workItemText(workStatus.issue),
     gate: gateName,
     command: commandText,
     "exit-code": exitCode,
@@ -418,7 +418,7 @@ export function parseTestArgs(args: string[]): { issueId: string; gateName: stri
 }
 
 
-export function buildReviewPacket({ root, workDir, issue, testsPath, vcs }: { root: string; workDir: string; issue: IssueReference; testsPath: string; vcs: string }): string {
+export function buildReviewPacket({ root, workDir, issue, testsPath, vcs }: { root: string; workDir: string; issue: WorkItemReference; testsPath: string; vcs: string }): string {
   const contractPath = join(workDir, "contract.md");
   const contract = existsSync(contractPath) ? readFileSync(contractPath, "utf8") : "_Missing contract.md_";
   const testsSummary = buildTestEvidenceSummary(testsPath);
@@ -430,8 +430,8 @@ export function buildReviewPacket({ root, workDir, issue, testsPath, vcs }: { ro
   const diffCommand = vcs === "jj" ? "jj --no-pager diff --git" : vcs === "git" ? "git diff -- ." : "the configured VCS diff command";
 
   return `# Review Packet\n\n` +
-    `## Issue Reference\n\n` +
-    `Issue: ${issueText(issue)}\n\n` +
+    `## Work Item Reference\n\n` +
+    `Work item: ${workItemText(issue)}\n\n` +
     `Kind: ${issue.kind}\n\n` +
     `## Reviewer Instructions\n\n` +
     `Review the diff against the issue execution contract. Slopflow does not create \`review.json\`; write it only if you are the reviewer.\n\n` +

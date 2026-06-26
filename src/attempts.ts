@@ -3,8 +3,8 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } fr
 import { dirname, join, resolve } from "node:path";
 
 import { assertSafeWorkKey, attemptLockPath, boundText, buildTestEvidenceSummary, changedFilesFromDiff, findRepoRoot, issueWorkLockPath, parseReasonArg, printBlock, readJson, readMachineConfig, readWorkStatus, readdirSyncSafe, relativeToCwd, resolveWorkDir, runTextCommand, selectionLockPath, withArtifactLock, writeJson } from "./infra.js";
-import { issueText, summarizeText } from "./issue-model.js";
-import type { AgentAttempt, AttemptWorkspace, AttemptWorkspacePointer, IssueReference, MachineConfig, WorkStatus } from "./types.js";
+import { workItemText, summarizeText } from "./issue-model.js";
+import type { AgentAttempt, AttemptWorkspace, AttemptWorkspacePointer, WorkItemReference, MachineConfig, WorkStatus } from "./types.js";
 import { REVIEW_DIFF_LIMIT } from "./types.js";
 import { SlopflowError } from "./types.js";
 
@@ -65,7 +65,7 @@ export function attemptCreateCommand(args: string[]): number {
 
     printBlock("attempt", {
       status: "created",
-      issue: issueText(workStatus.issue),
+      issue: workItemText(workStatus.issue),
       "created-count": created.length,
       attempts: created.map((attempt) => attempt.attempt_id).join(","),
       "next-step": `cd <attempt-workspace>, write summary.md, then slopflow attempt submit ${issueId} <attempt-id>`,
@@ -81,7 +81,7 @@ export function attemptListCommand(args: string[]): number {
   const attempts = listAttempts(attemptsRoot);
   printBlock("attempts", {
     status: "listed",
-    issue: issueText(workStatus.issue),
+    issue: workItemText(workStatus.issue),
     count: attempts.length,
     attempts: attempts.map((attempt) => `${attempt.attempt_id}:${attempt.status}`).join(",") || "none",
     "next-step": attempts.length > 0 ? `slopflow attempt status ${issueId} <attempt-id>` : `slopflow attempt create ${issueId}`,
@@ -98,7 +98,7 @@ export function attemptStatusCommand(args: string[]): number {
     const attempts = listAttempts(attemptsRoot);
     printBlock("attempts", {
       status: "listed",
-      issue: issueText(workStatus.issue),
+      issue: workItemText(workStatus.issue),
       count: attempts.length,
       attempts: attempts.map((attempt) => `${attempt.attempt_id}:${attempt.status}`).join(",") || "none",
       "next-step": attempts.length > 0 ? `slopflow attempt status ${issueId} <attempt-id>` : `slopflow attempt create ${issueId}`,
@@ -109,7 +109,7 @@ export function attemptStatusCommand(args: string[]): number {
   const attemptDir = join(attemptsRoot, attemptId);
   printBlock("attempt", {
     status: attempt.status,
-    issue: issueText(workStatus.issue),
+    issue: workItemText(workStatus.issue),
     attempt: attempt.attempt_id,
     summary: existsSync(join(attemptDir, "summary.md")) ? "present" : "missing",
     evidence: existsSync(join(attemptDir, "evidence", "tests.json")) ? "present" : "missing",
@@ -132,7 +132,7 @@ export function attemptSubmitCommand(args: string[]): number {
     if (!existsSync(summaryPath)) {
       printBlock("attempt", {
         status: "blocked",
-        issue: issueText(workStatus.issue),
+        issue: workItemText(workStatus.issue),
         attempt: attemptId,
         reason: "missing summary.md",
         summary: relativeToCwd(summaryPath),
@@ -148,7 +148,7 @@ export function attemptSubmitCommand(args: string[]): number {
     writeJson(join(attemptDir, "attempt.json"), updated);
     printBlock("attempt", {
       status: "submitted",
-      issue: issueText(workStatus.issue),
+      issue: workItemText(workStatus.issue),
       attempt: attemptId,
       summary: relativeToCwd(summaryPath),
       "next-step": `slopflow attempt status ${issueId} ${attemptId}`,
@@ -176,7 +176,7 @@ export function attemptAbandonCommand(args: string[]): number {
     writeFileSync(join(attemptDir, "abandon-note.md"), buildAttemptAbandonNote(workStatus.issue, attemptId, reason, now), "utf8");
     printBlock("attempt", {
       status: "abandoned",
-      issue: issueText(workStatus.issue),
+      issue: workItemText(workStatus.issue),
       attempt: attemptId,
       "abandon-note": relativeToCwd(join(attemptDir, "abandon-note.md")),
       artifacts: "preserved",
@@ -198,7 +198,7 @@ export function attemptCompareCommand(args: string[]): number {
     writeFileSync(comparisonPath, buildAttemptComparison({ workDir, attempts: submitted }), "utf8");
     printBlock("attempt-comparison", {
       status: "created",
-      issue: issueText(workStatus.issue),
+      issue: workItemText(workStatus.issue),
       attempts: submitted.length,
       comparison: relativeToCwd(comparisonPath),
       "next-step": submitted.length > 0 ? `review ${relativeToCwd(comparisonPath)} and run slopflow attempt select ${issueId} <attempt-id> --reason <text>` : `submit attempts with slopflow attempt submit ${issueId} <attempt-id>`,
@@ -292,7 +292,7 @@ export function attemptSelectCommand(args: string[]): number {
     });
     printBlock("attempt-selection", {
       status: "selected",
-      issue: issueText(workStatus.issue),
+      issue: workItemText(workStatus.issue),
       attempt: attemptId,
       selection: relativeToCwd(selectionPath),
       "next-step": `slopflow attempt status ${issueId} ${attemptId}`,
@@ -348,7 +348,7 @@ export function attemptPromoteCommand(args: string[]): number {
     });
     printBlock("attempt-promotion", {
       status: "promoted",
-      issue: issueText(workStatus.issue),
+      issue: workItemText(workStatus.issue),
       attempt: selectedAttemptId,
       mode: "artifact-only",
       "execution-workspace": workspace.path,
@@ -553,8 +553,8 @@ export function nextStepForAttempt(issueId: string, attempt: AgentAttempt, attem
 }
 
 
-export function buildAttemptGoalPrompt(issue: IssueReference, attemptId: string, workspacePath?: string): string {
-  return `You are working on ${issueText(issue)}, agent attempt ${attemptId}.\n\n` +
+export function buildAttemptGoalPrompt(issue: WorkItemReference, attemptId: string, workspacePath?: string): string {
+  return `You are working on ${workItemText(issue)}, agent attempt ${attemptId}.\n\n` +
     `${workspacePath ? `Use execution workspace:\n\n\`${workspacePath}\`\n\n` : ""}` +
     `Read the canonical issue execution contract before editing.\n\n` +
     `Do not edit other attempts or fabricate Slopflow artifacts.\n\n` +
@@ -564,9 +564,9 @@ export function buildAttemptGoalPrompt(issue: IssueReference, attemptId: string,
 }
 
 
-export function buildAttemptAbandonNote(issue: IssueReference, attemptId: string, reason: string, timestamp: string): string {
+export function buildAttemptAbandonNote(issue: WorkItemReference, attemptId: string, reason: string, timestamp: string): string {
   return `# Attempt Abandon Note\n\n` +
-    `Issue: ${issueText(issue)}\n\n` +
+    `Work item: ${workItemText(issue)}\n\n` +
     `Attempt: ${attemptId}\n\n` +
     `Abandoned at: ${timestamp}\n\n` +
     `## Reason\n\n${reason}\n`;

@@ -1,13 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 
-import { defaultBaseUrl, normalizeBaseUrl, normalizeIssueReference, summarizeText } from "./issue-model.js";
-import type { IssueReference, TrackedItem, TrackedItemComment } from "./types.js";
+import { defaultBaseUrl, normalizeBaseUrl, normalizeWorkItemReference, summarizeText } from "./issue-model.js";
+import type { WorkItemReference, WorkItem, WorkItemComment } from "./types.js";
 import { SlopflowError } from "./types.js";
 
-export function readTrackedItem(reference: IssueReference): TrackedItem {
-  if (reference.provider === "github") return fetchGitHubTrackedItem(reference);
-  if (reference.provider === "gitlab") return fetchGitLabTrackedItem(reference);
+export function readWorkItem(reference: WorkItemReference): WorkItem {
+  if (reference.provider === "github") return fetchGitHubWorkItem(reference);
+  if (reference.provider === "gitlab") return fetchGitLabWorkItem(reference);
   throw new SlopflowError(
     `Unsupported issue tracker provider: ${reference.provider}.`,
     "Configure a supported issue tracker provider.",
@@ -16,12 +16,12 @@ export function readTrackedItem(reference: IssueReference): TrackedItem {
 }
 
 
-export function fetchGitHubTrackedItem(reference: IssueReference): TrackedItem {
+export function fetchGitHubWorkItem(reference: WorkItemReference): WorkItem {
   const fields = "number,title,body,url,state,comments,labels";
   const issueArgs = ["issue", "view", reference.id, "--repo", reference.repository, "--json", fields];
   const issue = runGhJson(issueArgs);
   if (issue.ok) {
-    return normalizeGitHubTrackedItem(issue.value, { ...reference, kind: "issue" });
+    return normalizeGitHubWorkItem(issue.value, { ...reference, kind: "issue" });
   }
   if (!issue.notFound) {
     throw githubCommandError(issue);
@@ -30,7 +30,7 @@ export function fetchGitHubTrackedItem(reference: IssueReference): TrackedItem {
   const prArgs = ["pr", "view", reference.id, "--repo", reference.repository, "--json", fields];
   const pr = runGhJson(prArgs);
   if (pr.ok) {
-    return normalizeGitHubTrackedItem(pr.value, { ...reference, kind: "pull_request" });
+    return normalizeGitHubWorkItem(pr.value, { ...reference, kind: "pull_request" });
   }
   if (!pr.notFound) {
     throw githubCommandError(pr);
@@ -49,7 +49,7 @@ export function fetchGitHubTrackedItem(reference: IssueReference): TrackedItem {
 }
 
 
-export function fetchGitLabTrackedItem(reference: IssueReference): TrackedItem {
+export function fetchGitLabWorkItem(reference: WorkItemReference): WorkItem {
   const encodedProject = encodeURIComponent(reference.repository);
   const hostArgs = gitLabHostArgs(reference.base_url);
   const issue = runGlabJson([...hostArgs, "api", `projects/${encodedProject}/issues/${encodeURIComponent(reference.id)}`]);
@@ -60,7 +60,7 @@ export function fetchGitLabTrackedItem(reference: IssueReference): TrackedItem {
   if (!notes.ok) {
     throw gitlabCommandError(notes);
   }
-  return normalizeGitLabTrackedItem(issue.value, notes.value, reference);
+  return normalizeGitLabWorkItem(issue.value, notes.value, reference);
 }
 
 
@@ -198,7 +198,7 @@ export function nextStepForProviderFailure(failure: Exclude<ProviderJsonResult, 
 }
 
 
-export function normalizeGitHubTrackedItem(value: unknown, reference: IssueReference): TrackedItem {
+export function normalizeGitHubWorkItem(value: unknown, reference: WorkItemReference): WorkItem {
   const item = value as {
     number?: unknown;
     title?: unknown;
@@ -211,7 +211,7 @@ export function normalizeGitHubTrackedItem(value: unknown, reference: IssueRefer
   if (typeof item.number !== "number" || typeof item.title !== "string") {
     throw new SlopflowError("GitHub returned an unexpected issue shape.", undefined, 2);
   }
-  const ref = normalizeIssueReference({
+  const ref = normalizeWorkItemReference({
     ...reference,
     id: String(item.number),
     url: typeof item.url === "string" ? item.url : reference.url,
@@ -230,7 +230,7 @@ export function normalizeGitHubTrackedItem(value: unknown, reference: IssueRefer
 }
 
 
-export function normalizeGitLabTrackedItem(value: unknown, notes: unknown, reference: IssueReference): TrackedItem {
+export function normalizeGitLabWorkItem(value: unknown, notes: unknown, reference: WorkItemReference): WorkItem {
   const item = value as {
     iid?: unknown;
     title?: unknown;
@@ -242,7 +242,7 @@ export function normalizeGitLabTrackedItem(value: unknown, notes: unknown, refer
   if ((typeof item.iid !== "number" && typeof item.iid !== "string") || typeof item.title !== "string") {
     throw new SlopflowError("GitLab returned an unexpected issue shape.", undefined, 2);
   }
-  const ref = normalizeIssueReference({
+  const ref = normalizeWorkItemReference({
     ...reference,
     id: String(item.iid),
     url: typeof item.web_url === "string" ? item.web_url : reference.url,
@@ -259,7 +259,7 @@ export function normalizeGitLabTrackedItem(value: unknown, notes: unknown, refer
 }
 
 
-export function normalizeProviderComments(value: unknown): TrackedItemComment[] {
+export function normalizeProviderComments(value: unknown): WorkItemComment[] {
   if (!Array.isArray(value)) return [];
   return value
     .map((comment) => {
@@ -280,7 +280,7 @@ export function normalizeProviderComments(value: unknown): TrackedItemComment[] 
         body: entry.body,
       };
     })
-    .filter((comment): comment is TrackedItemComment => comment !== null);
+    .filter((comment): comment is WorkItemComment => comment !== null);
 }
 
 

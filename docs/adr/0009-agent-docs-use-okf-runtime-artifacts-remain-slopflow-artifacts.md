@@ -6,7 +6,7 @@ Slopflow's agent setup documentation should be compatible with the Open Knowledg
 
 Slopflow uses repository-local markdown documents for domain context, agent setup, triage vocabulary, and architectural decisions. OKF defines a minimal, human- and agent-friendly convention: markdown files with YAML frontmatter, organized as a portable directory tree.
 
-Slopflow also writes runtime artifacts under `.slopflow/work/<issue-id>/`, including issue snapshots, contracts, evidence, review verdicts, and completion notes. These artifacts are canonical workflow records produced and validated by the Slopflow CLI.
+Slopflow also writes runtime artifacts under `.slopflow/work/<work-key>/`, including issue snapshots, contracts, evidence, review verdicts, and completion notes. These artifacts are canonical workflow records produced and validated by the Slopflow CLI.
 
 ## Decision
 
@@ -14,7 +14,7 @@ Agent-consumable setup documents under `docs/agents/` are OKF concept documents.
 
 Directory indexes such as `docs/agents/index.md` and `docs/adr/index.md` may use OKF-style `type: Index` documents for progressive disclosure.
 
-Runtime work artifacts under `.slopflow/work/<issue-id>/` remain Slopflow artifacts, not OKF concepts by default. Their canonical shape is controlled by Slopflow commands and schemas, including:
+Runtime work artifacts under `.slopflow/work/<work-key>/` remain Slopflow artifacts, not OKF concepts by default. Their canonical shape is controlled by Slopflow commands and schemas, including:
 
 - `contract.md`;
 - `status.json`;

@@ -78,7 +78,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
 
 export function printHelp(): void {
   process.stdout.write(
-    `Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  doctor\n  install --harness pi|omp|claude-code|generic [--yes] [--force]\n  start <issue-id>\n  attempt create <issue-id> [--count <n>]\n  attempt list <issue-id>\n  attempt status <issue-id> [attempt-id]\n  attempt submit <issue-id> <attempt-id>\n  attempt abandon <issue-id> <attempt-id> --reason <text>\n  attempt compare <issue-id>\n  attempt select <issue-id> <attempt-id> --reason <text>\n  attempt promote <issue-id>\n  pause <issue-id> --reason <text>\n  resume <issue-id>\n  cancel <issue-id> --reason <text>\n  test <issue-id> --name <gate> -- <command...>\n  test <issue-id> --attempt <attempt-id> --name <gate> -- <command...>\n  review <issue-id>\n  complete <issue-id>\n  skill <name>\n`,
+    `Usage: slopflow <command>\n\nCommands:\n  init [--force]\n  status\n  doctor\n  install --harness pi|omp|claude-code|generic [--yes] [--force]\n  start <provider-native-id>\n  attempt create <issue-id> [--count <n>]\n  attempt list <issue-id>\n  attempt status <issue-id> [attempt-id]\n  attempt submit <issue-id> <attempt-id>\n  attempt abandon <issue-id> <attempt-id> --reason <text>\n  attempt compare <issue-id>\n  attempt select <issue-id> <attempt-id> --reason <text>\n  attempt promote <issue-id>\n  pause <issue-id> --reason <text>\n  resume <issue-id>\n  cancel <issue-id> --reason <text>\n  test <issue-id> --name <gate> -- <command...>\n  test <issue-id> --attempt <attempt-id> --name <gate> -- <command...>\n  review <issue-id>\n  complete <issue-id>\n  skill <name>\n`,
   );
 }
 
