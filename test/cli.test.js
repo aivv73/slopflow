@@ -1273,6 +1273,14 @@ test("test records attempt-scoped evidence from attempt workspace without satisf
   const log = readFileSync(join(attemptDir, evidence.attempts[0].log), "utf8");
   assert.match(log, new RegExp(`cwd: ${escapeRegExp(workspace.path)}`));
 
+  writeFileSync(join(attemptDir, "summary.md"), "Attempt summary from canonical artifacts.\n", "utf8");
+  const submitted = run([process.execPath, cliPath, "attempt", "submit", "2", "a1"], workspace.path, false, env);
+  assert.equal(submitted.status, 0, submitted.stderr);
+  assert.match(submitted.stdout, /status: submitted/);
+  const attempt = JSON.parse(readFileSync(join(attemptDir, "attempt.json"), "utf8"));
+  assert.equal(attempt.status, "submitted");
+  assert.equal(existsSync(join(workspace.path, ".slopflow", "work")), false);
+
   writeReview(repo, "2");
   const complete = slopflow(repo, env, "complete", "2");
   assert.equal(complete.status, 2);
